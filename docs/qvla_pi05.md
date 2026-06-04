@@ -80,11 +80,12 @@ uv run scripts/qvla_pi05_hessian_proxy.py \
   --bits 0,2,4,8,16 \
   --target pi05_backbones \
   --device cuda:0 \
-  --max-samples 32
+  --max-samples 800
 ```
 
 For a wiring-only smoke test, use `--fake-calib-samples 2` instead of
-`--calib-jsonl`. Do not use fake calibration for real gate assignment.
+`--calib-jsonl`, or use a small `--max-samples` value such as `32`. Do not use
+fake or small calibration for real gate assignment.
 
 For multi-GPU proxy building, run one shard per GPU. For example, with 4 GPUs:
 
@@ -98,7 +99,7 @@ for i in 0 1 2 3; do
     --bits 0,2,4,8,16 \
     --target pi05_backbones \
     --device cuda:0 \
-    --max-samples 32 \
+    --max-samples 800 \
     --num-layer-shards 4 \
     --layer-shard-index $i &
 done
