@@ -72,7 +72,7 @@ Accepted aliases:
 Run this on the Linux server with the converted PyTorch checkpoint available.
 
 ```bash
-uv run scripts/qvla_pi05_hessian_proxy.py \
+JAX_PLATFORMS=cpu uv run scripts/qvla_pi05_hessian_proxy.py \
   --config-name pi05_libero \
   --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
   --calib-jsonl /path/to/libero_calib.jsonl \
@@ -91,7 +91,7 @@ For multi-GPU proxy building, run one shard per GPU. For example, with 4 GPUs:
 
 ```bash
 for i in 0 1 2 3; do
-  CUDA_VISIBLE_DEVICES=$i uv run scripts/qvla_pi05_hessian_proxy.py \
+  CUDA_VISIBLE_DEVICES=$i JAX_PLATFORMS=cpu uv run scripts/qvla_pi05_hessian_proxy.py \
     --config-name pi05_libero \
     --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
     --calib-jsonl /path/to/libero_calib.jsonl \
@@ -126,7 +126,7 @@ directly to policy loading.
 ## 3. Serve Quantized Policy
 
 ```bash
-uv run scripts/serve_policy.py \
+JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
   policy:checkpoint \
   --policy.config pi05_libero \

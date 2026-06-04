@@ -6,11 +6,16 @@ import argparse
 from collections.abc import Mapping
 import json
 import logging
+import os
 import pathlib
 import urllib.parse
 
 import numpy as np
 import torch
+
+# The proxy workflow is PyTorch-only. Keep JAX on CPU to avoid initializing a
+# second CUDA stack before the openpi config/policy imports.
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 from openpi.policies import policy_config
 from openpi.quantization import qvla
