@@ -22,14 +22,26 @@ is not the full LIBERO dataset. If the full dataset is not available, generate
 this file from the fixed LIBERO simulator split:
 
 ```bash
+git submodule update --init --recursive third_party/libero
+uv venv --python 3.8 examples/libero/.venv
+source examples/libero/.venv/bin/activate
+uv pip sync \
+  examples/libero/requirements.txt \
+  third_party/libero/requirements.txt \
+  --extra-index-url https://download.pytorch.org/whl/cu113 \
+  --index-strategy=unsafe-best-match
+uv pip install -e packages/openpi-client
+uv pip install -e third_party/libero
+
 python examples/libero/generate_fixed_calib_jsonl.py \
   --out-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
   --image-dir out/baselines/libero_fixed_calib/images
 ```
 
 This writes 800 calibration entries by default: four suites, first 10 tasks per
-suite, first 20 initial states per task. The generated JSONL can be reused by
-the QVLA proxy command:
+suite, first 20 initial states per task. The JSONL and PNGs are written under
+`out/baselines/libero_fixed_calib/`. The generated JSONL can be reused by the
+QVLA proxy command:
 
 ```bash
 export CALIB=out/baselines/libero_fixed_calib/calib.jsonl

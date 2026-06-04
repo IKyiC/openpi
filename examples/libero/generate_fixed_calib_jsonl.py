@@ -5,11 +5,29 @@ import json
 import logging
 import math
 import pathlib
+import sys
 from typing import Optional
 
-from libero.libero import benchmark
-from libero.libero import get_libero_path
-from libero.libero.envs import OffScreenRenderEnv
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+for _path in (
+    _REPO_ROOT / "third_party" / "libero",
+    _REPO_ROOT / "packages" / "openpi-client" / "src",
+):
+    if _path.exists():
+        sys.path.insert(0, str(_path))
+
+try:
+    from libero.libero import benchmark
+    from libero.libero import get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv
+except ModuleNotFoundError as exc:
+    if exc.name == "libero":
+        raise ModuleNotFoundError(
+            "Could not import LIBERO. From the openpi repo root, run "
+            "`git submodule update --init --recursive third_party/libero`, then "
+            "install the LIBERO eval environment from examples/libero/README.md."
+        ) from exc
+    raise
 import numpy as np
 from openpi_client import image_tools
 from PIL import Image
