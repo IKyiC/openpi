@@ -32,6 +32,7 @@ uv pip sync \
   --index-strategy=unsafe-best-match
 uv pip install -e packages/openpi-client
 uv pip install -e third_party/libero
+export PYTHONPATH=$PWD/third_party/libero:$PYTHONPATH
 
 python examples/libero/generate_fixed_calib_jsonl.py \
   --out-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
