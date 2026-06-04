@@ -13,12 +13,14 @@ import dataclasses
 import heapq
 import json
 import logging
+import math
 import pathlib
 from typing import Any
 from typing import Literal
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
@@ -298,13 +300,17 @@ class HessianProxy:
                 inp = inp.reshape((-1, inp.shape[-1]))
             inp = inp.t()
         elif isinstance(self.layer, nn.Conv2d):
-            unfold = nn.Unfold(
-                self.layer.kernel_size,
+            padding = self.layer.padding
+            if isinstance(padding, str):
+                inp = _pad_conv2d_string_padding(inp, self.layer)
+                padding = 0
+            inp = F.unfold(
+                inp,
+                kernel_size=self.layer.kernel_size,
                 dilation=self.layer.dilation,
-                padding=self.layer.padding,
+                padding=padding,
                 stride=self.layer.stride,
             )
-            inp = unfold(inp)
             inp = inp.permute([1, 0, 2]).flatten(1)
 
         inp = inp.to(device=self.device, dtype=torch.float32)
@@ -327,6 +333,37 @@ class HessianProxy:
         hessian_inv = torch.cholesky_inverse(chol)
         chol_inv = torch.linalg.cholesky(hessian_inv, upper=True)
         return torch.diag(chol_inv)
+
+
+def _pad_conv2d_string_padding(inp: torch.Tensor, layer: nn.Conv2d) -> torch.Tensor:
+    """Apply Conv2d string padding before F.unfold, which only accepts ints."""
+
+    if layer.padding == "valid":
+        return inp
+    if layer.padding != "same":
+        raise ValueError(f"Unsupported Conv2d padding string for QVLA proxy: {layer.padding!r}")
+
+    input_h, input_w = int(inp.shape[-2]), int(inp.shape[-1])
+    kernel_h, kernel_w = _as_pair(layer.kernel_size)
+    stride_h, stride_w = _as_pair(layer.stride)
+    dilation_h, dilation_w = _as_pair(layer.dilation)
+
+    out_h = math.ceil(input_h / stride_h)
+    out_w = math.ceil(input_w / stride_w)
+    pad_h = max((out_h - 1) * stride_h + (kernel_h - 1) * dilation_h + 1 - input_h, 0)
+    pad_w = max((out_w - 1) * stride_w + (kernel_w - 1) * dilation_w + 1 - input_w, 0)
+
+    pad_top = pad_h // 2
+    pad_bottom = pad_h - pad_top
+    pad_left = pad_w // 2
+    pad_right = pad_w - pad_left
+    return F.pad(inp, (pad_left, pad_right, pad_top, pad_bottom))
+
+
+def _as_pair(value: int | tuple[int, int]) -> tuple[int, int]:
+    if isinstance(value, tuple):
+        return int(value[0]), int(value[1])
+    return int(value), int(value)
 
 
 @torch.no_grad()
