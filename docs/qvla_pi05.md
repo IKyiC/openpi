@@ -83,6 +83,10 @@ JAX_PLATFORMS=cpu uv run scripts/qvla_pi05_hessian_proxy.py \
   --max-samples 800
 ```
 
+The proxy command disables `torch.compile` by default (`--pytorch-compile-mode
+none`) because QVLA forward hooks and per-layer sweeps make PyTorch
+`max-autotune` compile overhead dominate runtime.
+
 For a wiring-only smoke test, use `--fake-calib-samples 2` instead of
 `--calib-jsonl`, or use a small `--max-samples` value such as `32`. Do not use
 fake or small calibration for real gate assignment.

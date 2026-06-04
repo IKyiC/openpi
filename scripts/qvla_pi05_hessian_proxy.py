@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+import dataclasses
 import json
 import logging
 import os
@@ -167,6 +168,12 @@ def main() -> None:
     parser.add_argument("--percdamp", type=float, default=0.01)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--num-steps", type=int, default=10, help="Flow denoising steps during calibration inference.")
+    parser.add_argument(
+        "--pytorch-compile-mode",
+        default="none",
+        choices=["none", "default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"],
+        help="torch.compile mode for calibration inference. Defaults to disabled because proxy hooks are compile-hostile.",
+    )
     parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
@@ -184,6 +191,12 @@ def main() -> None:
 
     bits = qvla.parse_bits(args.bits)
     train_config = _config.get_config(args.config_name)
+    compile_mode = None if args.pytorch_compile_mode == "none" else args.pytorch_compile_mode
+    if hasattr(train_config.model, "pytorch_compile_mode"):
+        train_config = dataclasses.replace(
+            train_config,
+            model=dataclasses.replace(train_config.model, pytorch_compile_mode=compile_mode),
+        )
     checkpoint_dir = _resolve_local_or_uri(args.checkpoint_dir)
 
     policy = policy_config.create_trained_policy(
