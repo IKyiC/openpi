@@ -17,7 +17,25 @@ For the full 2x2 baseline organization, see `docs/baseline_matrix.md`.
 
 ## Calibration JSONL
 
-Each line should describe one LIBERO-style policy input. Image paths may be
+`--calib-jsonl` points to a small JSONL file used by QVLA proxy estimation. It
+is not the full LIBERO dataset. If the full dataset is not available, generate
+this file from the fixed LIBERO simulator split:
+
+```bash
+python examples/libero/generate_fixed_calib_jsonl.py \
+  --out-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
+  --image-dir out/baselines/libero_fixed_calib/images
+```
+
+This writes 800 calibration entries by default: four suites, first 10 tasks per
+suite, first 20 initial states per task. The generated JSONL can be reused by
+the QVLA proxy command:
+
+```bash
+export CALIB=out/baselines/libero_fixed_calib/calib.jsonl
+```
+
+Each JSONL line describes one LIBERO-style policy input. Image paths may be
 absolute or relative to the JSONL file directory, or to `--image-root`.
 
 ```json

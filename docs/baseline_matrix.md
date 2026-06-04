@@ -29,12 +29,24 @@ python examples/libero/fixed_libero_baseline_eval.py \
   --port 8000
 ```
 
+If you need QVLA calibration inputs and do not have the full LIBERO dataset,
+generate them from the same fixed simulator split:
+
+```bash
+python examples/libero/generate_fixed_calib_jsonl.py \
+  --out-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
+  --image-dir out/baselines/libero_fixed_calib/images
+```
+
 ## Artifact Layout
 
 Use a method/model directory so output names stay comparable across branches:
 
 ```text
 out/baselines/
+  libero_fixed_calib/
+    calib.jsonl
+    images/
   qvla/
     pi05_libero/
       proxy.pt
