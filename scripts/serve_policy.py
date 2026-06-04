@@ -7,6 +7,7 @@ import tyro
 
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
+from openpi.quantization import qvla as _qvla
 from openpi.serving import websocket_policy_server
 from openpi.training import config as _config
 
@@ -42,14 +43,20 @@ class Args:
     # Environment to serve the policy for. This is only used when serving default policies.
     env: EnvMode = EnvMode.ALOHA_SIM
 
-    # If provided, will be used in case the "prompt" key is not present in the data, or if the model doesn't have a default
-    # prompt.
+    # If provided, will be used in case the "prompt" key is not present in the data, or if the model doesn't have a
+    # default prompt.
     default_prompt: str | None = None
 
     # Port to serve the policy on.
     port: int = 8000
     # Record the policy's behavior for debugging.
     record: bool = False
+    # Optional QVLA gate assignment file for PyTorch checkpoints.
+    qvla_gates_path: str | None = None
+    # Target module preset used when applying QVLA gates.
+    qvla_target: _qvla.TargetPreset = "pi05_backbones"
+    # How to handle gate length mismatches.
+    qvla_mismatch_policy: _qvla.MismatchPolicy = "median"
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
@@ -76,11 +83,23 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 }
 
 
-def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) -> _policy.Policy:
+def create_default_policy(
+    env: EnvMode,
+    *,
+    default_prompt: str | None = None,
+    qvla_gates_path: str | None = None,
+    qvla_target: _qvla.TargetPreset = "pi05_backbones",
+    qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
+) -> _policy.Policy:
     """Create a default policy for the given environment."""
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
         return _policy_config.create_trained_policy(
-            _config.get_config(checkpoint.config), checkpoint.dir, default_prompt=default_prompt
+            _config.get_config(checkpoint.config),
+            checkpoint.dir,
+            default_prompt=default_prompt,
+            qvla_gates_path=qvla_gates_path,
+            qvla_target=qvla_target,
+            qvla_mismatch_policy=qvla_mismatch_policy,
         )
     raise ValueError(f"Unsupported environment mode: {env}")
 
@@ -90,10 +109,21 @@ def create_policy(args: Args) -> _policy.Policy:
     match args.policy:
         case Checkpoint():
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+                _config.get_config(args.policy.config),
+                args.policy.dir,
+                default_prompt=args.default_prompt,
+                qvla_gates_path=args.qvla_gates_path,
+                qvla_target=args.qvla_target,
+                qvla_mismatch_policy=args.qvla_mismatch_policy,
             )
         case Default():
-            return create_default_policy(args.env, default_prompt=args.default_prompt)
+            return create_default_policy(
+                args.env,
+                default_prompt=args.default_prompt,
+                qvla_gates_path=args.qvla_gates_path,
+                qvla_target=args.qvla_target,
+                qvla_mismatch_policy=args.qvla_mismatch_policy,
+            )
 
 
 def main(args: Args) -> None:

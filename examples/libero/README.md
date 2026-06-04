@@ -34,6 +34,14 @@ export SERVER_ARGS="--env LIBERO policy:checkpoint --policy.config pi05_libero -
 export CLIENT_ARGS="--args.task-suite-name libero_10"
 ```
 
+For quantization baselines, use the fixed baseline client. It evaluates
+`libero_spatial`, `libero_object`, `libero_goal`, and `libero_10`, using the
+first 10 tasks and the first 20 initial states per task in each suite.
+
+```bash
+python examples/libero/fixed_libero_baseline_eval.py --host 0.0.0.0 --port 8000
+```
+
 ## Without Docker (not recommended)
 
 Terminal window 1:

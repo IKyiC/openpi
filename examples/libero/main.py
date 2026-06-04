@@ -3,6 +3,7 @@ import dataclasses
 import logging
 import math
 import pathlib
+from typing import Optional
 
 import imageio
 from libero.libero import benchmark
@@ -34,6 +35,7 @@ class Args:
     task_suite_name: str = (
         "libero_spatial"  # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90
     )
+    num_tasks: Optional[int] = None  # Number of tasks to evaluate from the beginning of the suite.
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
 
@@ -45,7 +47,7 @@ class Args:
     seed: int = 7  # Random Seed (for reproducibility)
 
 
-def eval_libero(args: Args) -> None:
+def eval_libero(args: Args) -> dict:
     # Set random seed
     np.random.seed(args.seed)
 
@@ -53,7 +55,12 @@ def eval_libero(args: Args) -> None:
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[args.task_suite_name]()
     num_tasks_in_suite = task_suite.n_tasks
+    num_tasks_to_eval = num_tasks_in_suite if args.num_tasks is None else min(args.num_tasks, num_tasks_in_suite)
+    if num_tasks_to_eval <= 0:
+        raise ValueError("At least one LIBERO task must be evaluated.")
+
     logging.info(f"Task suite: {args.task_suite_name}")
+    logging.info(f"Evaluating first {num_tasks_to_eval} / {num_tasks_in_suite} tasks")
 
     pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
 
@@ -74,12 +81,18 @@ def eval_libero(args: Args) -> None:
 
     # Start evaluation
     total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    task_results = []
+    for task_id in tqdm.tqdm(range(num_tasks_to_eval)):
         # Get task
         task = task_suite.get_task(task_id)
 
         # Get default LIBERO initial states
         initial_states = task_suite.get_task_init_states(task_id)
+        if args.num_trials_per_task > len(initial_states):
+            raise ValueError(
+                f"Requested {args.num_trials_per_task} trials for task {task_id}, "
+                f"but only {len(initial_states)} initial states are available."
+            )
 
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
@@ -98,6 +111,7 @@ def eval_libero(args: Args) -> None:
 
             # Setup
             t = 0
+            done = False
             replay_images = []
 
             logging.info(f"Starting episode {task_episodes+1}...")
@@ -142,9 +156,11 @@ def eval_libero(args: Args) -> None:
 
                         # Query model to get action
                         action_chunk = client.infer(element)["actions"]
-                        assert (
-                            len(action_chunk) >= args.replan_steps
-                        ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        if len(action_chunk) < args.replan_steps:
+                            raise ValueError(
+                                f"We want to replan every {args.replan_steps} steps, "
+                                f"but policy only predicts {len(action_chunk)} steps."
+                            )
                         action_plan.extend(action_chunk[: args.replan_steps])
 
                     action = action_plan.popleft()
@@ -166,12 +182,22 @@ def eval_libero(args: Args) -> None:
 
             # Save a replay video of the episode
             suffix = "success" if done else "failure"
-            task_segment = task_description.replace(" ", "_")
-            imageio.mimwrite(
-                pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}.mp4",
-                [np.asarray(x) for x in replay_images],
-                fps=10,
-            )
+            if replay_images:
+                video_path = (
+                    pathlib.Path(args.video_out_path)
+                    / f"rollout_task_{task_id:02d}_episode_{episode_idx:02d}_{suffix}.mp4"
+                )
+                imageio.mimwrite(
+                    video_path,
+                    [np.asarray(x) for x in replay_images],
+                    fps=10,
+                )
+            else:
+                logging.warning(
+                    "Skipping video for task %s episode %s because no frames were recorded.",
+                    task_id,
+                    episode_idx,
+                )
 
             # Log current results
             logging.info(f"Success: {done}")
@@ -179,11 +205,29 @@ def eval_libero(args: Args) -> None:
             logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
 
         # Log final results
-        logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
+        task_success_rate = float(task_successes) / float(task_episodes)
+        task_results.append(
+            {
+                "task_id": task_id,
+                "task_description": str(task_description),
+                "success_rate": task_success_rate,
+                "episodes": task_episodes,
+                "successes": task_successes,
+            }
+        )
+        logging.info(f"Current task success rate: {task_success_rate}")
         logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
 
-    logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
+    total_success_rate = float(total_successes) / float(total_episodes)
+    logging.info(f"Total success rate: {total_success_rate}")
     logging.info(f"Total episodes: {total_episodes}")
+    return {
+        "task_suite_name": args.task_suite_name,
+        "success_rate": total_success_rate,
+        "total_episodes": total_episodes,
+        "total_successes": total_successes,
+        "task_results": task_results,
+    }
 
 
 def _get_libero_env(task, resolution, seed):
@@ -198,7 +242,7 @@ def _get_libero_env(task, resolution, seed):
 
 def _quat2axisangle(quat):
     """
-    Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py#L490C1-L512C55
+    Copied from robosuite transform_utils.py.
     """
     # clip quaternion
     if quat[3] > 1.0:

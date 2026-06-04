@@ -7,6 +7,7 @@ import jax.numpy as jnp
 
 import openpi.models.model as _model
 import openpi.policies.policy as _policy
+from openpi.quantization import qvla as _qvla
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
@@ -22,6 +23,9 @@ def create_trained_policy(
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
+    qvla_gates_path: pathlib.Path | str | None = None,
+    qvla_target: _qvla.TargetPreset = "pi05_backbones",
+    qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -37,10 +41,14 @@ def create_trained_policy(
             from the checkpoint directory.
         pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda", "cuda:0").
                       If None and is_pytorch=True, will use "cuda" if available, otherwise "cpu".
+        qvla_gates_path: Optional QVLA gate assignment file. When provided, the file is applied to the
+            already-loaded PyTorch model as weight-only fake quantization.
+        qvla_target: Target module preset for QVLA gate application.
+        qvla_mismatch_policy: How to handle gate length mismatches.
 
     Note:
         The function automatically detects whether the model is PyTorch-based by checking for the
-        presence of "model.safensors" in the checkpoint directory.
+        presence of "model.safetensors" in the checkpoint directory.
     """
     repack_transforms = repack_transforms or transforms.Group()
     checkpoint_dir = download.maybe_download(str(checkpoint_dir))
@@ -53,7 +61,17 @@ def create_trained_policy(
     if is_pytorch:
         model = train_config.model.load_pytorch(train_config, weight_path)
         model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
+        if qvla_gates_path is not None:
+            report = _qvla.inject_weight_fake_quant(
+                model,
+                qvla_gates_path,
+                target=qvla_target,
+                mismatch_policy=qvla_mismatch_policy,
+            )
+            logging.info("Applied QVLA fake weight quantization: %s", report.summary())
     else:
+        if qvla_gates_path is not None:
+            raise ValueError("QVLA fake weight quantization is only supported for PyTorch checkpoints.")
         model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
