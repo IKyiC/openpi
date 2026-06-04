@@ -156,4 +156,4 @@ def _quat2axisangle(quat):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    tyro.cli(generate_calib_jsonl)
+    generate_calib_jsonl(tyro.cli(Args))
