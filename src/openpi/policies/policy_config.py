@@ -9,7 +9,7 @@ import openpi.models.model as _model
 import openpi.policies.policy as _policy
 from openpi.quantization import qvla as _qvla
 import openpi.shared.download as download
-from openpi.training import checkpoints as _checkpoints
+import openpi.shared.normalize as _normalize
 from openpi.training import config as _config
 import openpi.transforms as transforms
 
@@ -79,7 +79,9 @@ def create_trained_policy(
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
-        norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
+        norm_stats_dir = checkpoint_dir / "assets" / data_config.asset_id
+        norm_stats = _normalize.load(norm_stats_dir)
+        logging.info("Loaded norm stats from %s", norm_stats_dir)
 
     # Determine the device to use for PyTorch models
     if is_pytorch and pytorch_device is None:
