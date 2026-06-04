@@ -157,6 +157,8 @@ def main() -> None:
     parser.add_argument("--max-samples", type=int, default=32)
     parser.add_argument("--fake-calib-samples", type=int, default=0, help="Use random LIBERO examples for smoke tests.")
     parser.add_argument("--max-layers", type=int, default=None)
+    parser.add_argument("--num-layer-shards", type=int, default=1, help="Split target layers across this many jobs.")
+    parser.add_argument("--layer-shard-index", type=int, default=0, help="Layer shard index for this job.")
     parser.add_argument("--percdamp", type=float, default=0.01)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--num-steps", type=int, default=10, help="Flow denoising steps during calibration inference.")
@@ -170,6 +172,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, force=True)
     if args.num_steps <= 0:
         raise ValueError("--num-steps must be positive")
+    if args.num_layer_shards <= 0:
+        raise ValueError("--num-layer-shards must be positive")
+    if args.layer_shard_index < 0 or args.layer_shard_index >= args.num_layer_shards:
+        raise ValueError("--layer-shard-index must be in [0, num_layer_shards)")
 
     bits = qvla.parse_bits(args.bits)
     train_config = _config.get_config(args.config_name)
@@ -190,6 +196,17 @@ def main() -> None:
         target_modules = target_modules[: args.max_layers]
     if not target_modules:
         raise RuntimeError(f"No target modules found for target preset {args.target!r}")
+    total_target_layers = len(target_modules)
+    if args.num_layer_shards > 1:
+        target_modules = [
+            item
+            for layer_index, item in enumerate(target_modules)
+            if layer_index % args.num_layer_shards == args.layer_shard_index
+        ]
+    if not target_modules:
+        raise RuntimeError(
+            f"No target modules assigned to shard {args.layer_shard_index}/{args.num_layer_shards}."
+        )
 
     if args.fake_calib_samples > 0:
         calib_examples = _make_fake_calib_samples(args.fake_calib_samples)
@@ -205,11 +222,14 @@ def main() -> None:
         raise ValueError("Provide --calib-jsonl, or use --fake-calib-samples for a smoke test.")
 
     logging.info(
-        "Building QVLA proxy: config=%s checkpoint=%s target=%s layers=%s samples=%s bits=%s",
+        "Building QVLA proxy: config=%s checkpoint=%s target=%s layers=%s/%s shard=%s/%s samples=%s bits=%s",
         args.config_name,
         checkpoint_dir,
         args.target,
         len(target_modules),
+        total_target_layers,
+        args.layer_shard_index,
+        args.num_layer_shards,
         len(calib_examples),
         bits,
     )

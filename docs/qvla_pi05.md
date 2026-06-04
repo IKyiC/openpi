@@ -55,6 +55,29 @@ uv run scripts/qvla_pi05_hessian_proxy.py \
 For a wiring-only smoke test, use `--fake-calib-samples 2` instead of
 `--calib-jsonl`. Do not use fake calibration for real gate assignment.
 
+For multi-GPU proxy building, run one shard per GPU. For example, with 4 GPUs:
+
+```bash
+for i in 0 1 2 3; do
+  CUDA_VISIBLE_DEVICES=$i uv run scripts/qvla_pi05_hessian_proxy.py \
+    --config-name pi05_libero \
+    --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
+    --calib-jsonl /path/to/libero_calib.jsonl \
+    --out-path out/baselines/qvla/pi05_libero/proxy_shard_${i}.pt \
+    --bits 0,2,4,8,16 \
+    --target pi05_backbones \
+    --device cuda:0 \
+    --max-samples 32 \
+    --num-layer-shards 4 \
+    --layer-shard-index $i &
+done
+wait
+
+uv run scripts/qvla_merge_proxy_shards.py \
+  --out-path out/baselines/qvla/pi05_libero/proxy.pt \
+  out/baselines/qvla/pi05_libero/proxy_shard_*.pt
+```
+
 ## 2. Assign Gates
 
 ```bash

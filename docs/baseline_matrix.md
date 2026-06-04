@@ -83,6 +83,10 @@ uv run scripts/serve_policy.py \
   --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
 ```
 
+For multi-GPU proxy generation, shard target layers across jobs with
+`--num-layer-shards` and `--layer-shard-index`, then merge with
+`scripts/qvla_merge_proxy_shards.py`.
+
 OMEGAQVLA + pi05 should get its own branch and scripts/module names, for
 example:
 
