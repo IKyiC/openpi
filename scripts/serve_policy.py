@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import logging
 import socket
+from typing import Literal
 
 import tyro
 
@@ -10,6 +11,8 @@ from openpi.policies import policy_config as _policy_config
 from openpi.quantization import qvla as _qvla
 from openpi.serving import websocket_policy_server
 from openpi.training import config as _config
+
+PytorchCompileMode = Literal["none", "default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"]
 
 
 class EnvMode(enum.Enum):
@@ -61,6 +64,8 @@ class Args:
     qvla_activation_bits: int | None = None
     # Optional calibrated activation max-abs scale file.
     qvla_activation_scales_path: str | None = None
+    # torch.compile mode for PyTorch policies. Disabled by default for predictable serving startup.
+    pytorch_compile_mode: PytorchCompileMode = "none"
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
@@ -87,6 +92,17 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 }
 
 
+def get_config(config_name: str, pytorch_compile_mode: PytorchCompileMode) -> _config.TrainConfig:
+    train_config = _config.get_config(config_name)
+    compile_mode = None if pytorch_compile_mode == "none" else pytorch_compile_mode
+    if hasattr(train_config.model, "pytorch_compile_mode"):
+        train_config = dataclasses.replace(
+            train_config,
+            model=dataclasses.replace(train_config.model, pytorch_compile_mode=compile_mode),
+        )
+    return train_config
+
+
 def create_default_policy(
     env: EnvMode,
     *,
@@ -96,11 +112,12 @@ def create_default_policy(
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
     qvla_activation_bits: int | None = None,
     qvla_activation_scales_path: str | None = None,
+    pytorch_compile_mode: PytorchCompileMode = "none",
 ) -> _policy.Policy:
     """Create a default policy for the given environment."""
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
         return _policy_config.create_trained_policy(
-            _config.get_config(checkpoint.config),
+            get_config(checkpoint.config, pytorch_compile_mode),
             checkpoint.dir,
             default_prompt=default_prompt,
             qvla_gates_path=qvla_gates_path,
@@ -117,7 +134,7 @@ def create_policy(args: Args) -> _policy.Policy:
     match args.policy:
         case Checkpoint():
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config),
+                get_config(args.policy.config, args.pytorch_compile_mode),
                 args.policy.dir,
                 default_prompt=args.default_prompt,
                 qvla_gates_path=args.qvla_gates_path,
@@ -125,6 +142,7 @@ def create_policy(args: Args) -> _policy.Policy:
                 qvla_mismatch_policy=args.qvla_mismatch_policy,
                 qvla_activation_bits=args.qvla_activation_bits,
                 qvla_activation_scales_path=args.qvla_activation_scales_path,
+                pytorch_compile_mode=args.pytorch_compile_mode,
             )
         case Default():
             return create_default_policy(
