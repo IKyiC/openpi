@@ -142,7 +142,6 @@ def create_policy(args: Args) -> _policy.Policy:
                 qvla_mismatch_policy=args.qvla_mismatch_policy,
                 qvla_activation_bits=args.qvla_activation_bits,
                 qvla_activation_scales_path=args.qvla_activation_scales_path,
-                pytorch_compile_mode=args.pytorch_compile_mode,
             )
         case Default():
             return create_default_policy(
@@ -153,6 +152,7 @@ def create_policy(args: Args) -> _policy.Policy:
                 qvla_mismatch_policy=args.qvla_mismatch_policy,
                 qvla_activation_bits=args.qvla_activation_bits,
                 qvla_activation_scales_path=args.qvla_activation_scales_path,
+                pytorch_compile_mode=args.pytorch_compile_mode,
             )
 
 
