@@ -47,6 +47,30 @@ def test_inject_weight_fake_quant_applies_channel_gates(tmp_path):
     assert torch.allclose(layer.weight.data[1], torch.tensor([0.0, -0.8, 0.0]))
 
 
+def test_inject_activation_fake_quant_quantizes_layer_inputs(tmp_path):
+    model = _TinyPi05LikeModel()
+    layer = model.paligemma_with_expert.gemma_expert.model.proj
+    layer.weight.data = torch.tensor([[1.0, 1.0, 1.0], [0.0, 0.0, 0.0]])
+    path = tmp_path / "activation_amax.json"
+    path.write_text(
+        json.dumps(
+            {
+                "activations": {
+                    "paligemma_with_expert.gemma_expert.model.proj": {
+                        "amax": 1.0,
+                    }
+                }
+            }
+        )
+    )
+
+    report = qvla.inject_activation_fake_quant(model, num_bits=2, activation_scales_path=path)
+    out = layer(torch.tensor([[0.25, 0.75, -0.75]]))
+
+    assert report.injected_layers == 1
+    assert torch.allclose(out[0, 0], torch.tensor(0.0))
+
+
 def test_greedy_allocate_reduces_cheapest_channels_first():
     proxies = {
         "a": {

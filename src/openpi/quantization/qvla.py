@@ -1,4 +1,4 @@
-"""QVLA-style weight-only fake quantization for openpi PyTorch models.
+"""QVLA-style fake quantization for openpi PyTorch models.
 
 This module adapts the QVLA algorithmic pieces to openpi models. It does not
 load OpenVLA/HuggingFace checkpoints; callers should load openpi policies first
@@ -68,8 +68,28 @@ class InjectionReport:
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class ActivationInjectionReport:
+    """Summary of an activation fake-quant hook injection pass."""
+
+    activation_bits: int
+    target_layers: int
+    injected_layers: int
+    scale_layers: int
+    missing_scale_layers: tuple[str, ...]
+
+    def summary(self) -> str:
+        return (
+            f"activation_bits={self.activation_bits}, "
+            f"target_layers={self.target_layers}, "
+            f"injected_layers={self.injected_layers}, "
+            f"scale_layers={self.scale_layers}, "
+            f"missing_scale_layers={len(self.missing_scale_layers)}"
+        )
+
+
 def is_target_module(name: str, module: nn.Module, target: TargetPreset = "pi05_backbones") -> bool:
-    """Return whether a module should receive QVLA fake-weight quantization."""
+    """Return whether a module should receive QVLA fake quantization."""
 
     if not isinstance(module, (nn.Linear, nn.Conv2d)):
         return False
@@ -168,23 +188,60 @@ def find_gate_for_module(module_name: str, gates: Mapping[str, torch.Tensor]) ->
 
 
 @torch.no_grad()
-def fake_quantize_tensor_sym(x: torch.Tensor, num_bits: int) -> torch.Tensor:
-    """Symmetric per-tensor fake quantization used per output channel."""
+def fake_quantize_tensor_sym(
+    x: torch.Tensor,
+    num_bits: int,
+    *,
+    scale: torch.Tensor | float | None = None,
+) -> torch.Tensor:
+    """Symmetric fake quantization with an optional precomputed quantization scale."""
 
     if num_bits >= 16:
         return x
     if num_bits <= 0:
         return torch.zeros_like(x)
+    if not torch.is_floating_point(x):
+        return x
 
     qmax = (1 << (num_bits - 1)) - 1
     if qmax <= 0:
         raise ValueError(f"num_bits must be 0 or at least 2, got {num_bits}")
 
     work = x.float()
-    xmax = work.abs().max().clamp_min(1e-8)
-    scale = xmax / float(qmax)
-    quantized = torch.round(work / scale).clamp_(min=-(qmax + 1), max=qmax)
-    return (quantized * scale).to(dtype=x.dtype)
+    if scale is None:
+        quant_scale = work.abs().max().clamp_min(1e-8) / float(qmax)
+    else:
+        quant_scale = torch.as_tensor(scale, device=x.device, dtype=torch.float32).clamp_min(1e-8)
+    quantized = torch.round(work / quant_scale).clamp_(min=-(qmax + 1), max=qmax)
+    return (quantized * quant_scale).to(dtype=x.dtype)
+
+
+@torch.no_grad()
+def fake_quantize_activation_sym(
+    x: torch.Tensor,
+    num_bits: int,
+    *,
+    amax: torch.Tensor | float | None = None,
+) -> torch.Tensor:
+    """Symmetric activation fake quantization.
+
+    If ``amax`` is provided it is treated as a calibrated max-absolute activation
+    value. Otherwise the scale is computed dynamically from the current tensor.
+    """
+
+    if num_bits >= 16:
+        return x
+    if num_bits <= 1:
+        raise ValueError(f"activation bits must be at least 2 or 16, got {num_bits}")
+    if not torch.is_floating_point(x):
+        return x
+
+    if amax is None:
+        return fake_quantize_tensor_sym(x, num_bits)
+
+    qmax = (1 << (num_bits - 1)) - 1
+    quant_scale = torch.as_tensor(amax, device=x.device, dtype=torch.float32).clamp_min(1e-8) / float(qmax)
+    return fake_quantize_tensor_sym(x, num_bits, scale=quant_scale)
 
 
 @torch.no_grad()
@@ -268,6 +325,125 @@ def inject_weight_fake_quant(
         unused_gate_layers=unused_gate_layers,
     )
     logger.info("QVLA fake weight injection: %s", report.summary())
+    return report
+
+
+def _load_raw_activation_amax_file(scales_path: str | pathlib.Path) -> Mapping[str, Any]:
+    scales_path = pathlib.Path(scales_path).expanduser()
+    if scales_path.suffix == ".pt":
+        raw = torch.load(scales_path, map_location="cpu")
+    else:
+        with scales_path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"Expected activation scale file to contain a mapping, got {type(raw)!r}")
+    if isinstance(raw.get("activations"), Mapping):
+        raw = raw["activations"]
+    if isinstance(raw.get("activation_amax"), Mapping):
+        raw = raw["activation_amax"]
+    return raw
+
+
+def load_activation_amax(
+    scales_path: str | pathlib.Path,
+    device: torch.device | str | None = None,
+) -> dict[str, torch.Tensor]:
+    """Load calibrated max-absolute activation values.
+
+    Supported formats:
+    - raw mapping: {"module.name": 12.3}
+    - wrapped mapping: {"activations": {"module.name": {"amax": 12.3}}}
+    - wrapped mapping: {"activation_amax": {"module.name": 12.3}}
+    """
+
+    torch_device = None if device is None else torch.device(device)
+    raw = _load_raw_activation_amax_file(scales_path)
+    amax: dict[str, torch.Tensor] = {}
+    for key, value in raw.items():
+        if isinstance(value, Mapping):
+            if "amax" not in value:
+                continue
+            value = value["amax"]
+        tensor = torch.as_tensor(value, dtype=torch.float32)
+        if tensor.numel() != 1:
+            tensor = tensor.flatten()[0]
+        if torch_device is not None:
+            tensor = tensor.to(torch_device)
+        amax[str(key)] = tensor.reshape(())
+    return amax
+
+
+def find_activation_amax_for_module(
+    module_name: str,
+    activation_amax: Mapping[str, torch.Tensor],
+) -> tuple[str, torch.Tensor] | None:
+    """Find a calibrated activation scale for a module name, including common aliases."""
+
+    for candidate in _gate_name_candidates(module_name):
+        if candidate in activation_amax:
+            return candidate, activation_amax[candidate]
+    return None
+
+
+def inject_activation_fake_quant(
+    model: nn.Module,
+    *,
+    num_bits: int,
+    target: TargetPreset = "pi05_backbones",
+    activation_scales_path: str | pathlib.Path | None = None,
+) -> ActivationInjectionReport:
+    """Register forward pre-hooks that fake-quantize target layer input activations."""
+
+    if num_bits >= 16:
+        target_layers = len(iter_target_modules(model, target=target))
+        return ActivationInjectionReport(
+            activation_bits=int(num_bits),
+            target_layers=target_layers,
+            injected_layers=0,
+            scale_layers=0,
+            missing_scale_layers=(),
+        )
+    if num_bits <= 1:
+        raise ValueError(f"activation bits must be at least 2 or 16, got {num_bits}")
+
+    activation_amax = load_activation_amax(activation_scales_path) if activation_scales_path is not None else None
+    target_modules = iter_target_modules(model, target=target)
+    missing_scale_layers: list[str] = []
+    handles = []
+
+    for module_name, module in target_modules:
+        matched_scale = None if activation_amax is None else find_activation_amax_for_module(module_name, activation_amax)
+        if activation_amax is not None and matched_scale is None:
+            missing_scale_layers.append(module_name)
+        amax = None if matched_scale is None else matched_scale[1]
+
+        def _hook(
+            _module: nn.Module,
+            inputs: tuple[object, ...],
+            *,
+            activation_amax_ref: torch.Tensor | None = amax,
+            activation_bits: int = int(num_bits),
+        ) -> tuple[object, ...]:
+            if not inputs:
+                return inputs
+            first, *rest = inputs
+            if torch.is_tensor(first):
+                first = fake_quantize_activation_sym(first, activation_bits, amax=activation_amax_ref)
+            return (first, *rest)
+
+        handles.append(module.register_forward_pre_hook(_hook))
+
+    existing_handles = list(getattr(model, "_qvla_activation_quant_handles", []))
+    setattr(model, "_qvla_activation_quant_handles", [*existing_handles, *handles])
+
+    report = ActivationInjectionReport(
+        activation_bits=int(num_bits),
+        target_layers=len(target_modules),
+        injected_layers=len(handles),
+        scale_layers=0 if activation_amax is None else len(activation_amax),
+        missing_scale_layers=tuple(missing_scale_layers),
+    )
+    logger.info("QVLA fake activation injection: %s", report.summary())
     return report
 
 
@@ -514,6 +690,34 @@ def save_gate_assignment(
         "bits": [int(bit) for bit in bits],
         "assign": layer_bits,
         "stats": dict(stats),
+    }
+    with out_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
+def save_activation_amax(
+    out_path: str | pathlib.Path,
+    *,
+    target: TargetPreset,
+    samples: int,
+    activation_amax: Mapping[str, float],
+    nsamples: Mapping[str, int] | None = None,
+) -> None:
+    """Save calibrated max-absolute activation values for target modules."""
+
+    out_path = pathlib.Path(out_path).expanduser()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "target": target,
+        "stat": "max_abs",
+        "samples": int(samples),
+        "activations": {
+            str(name): {
+                "amax": float(value),
+                "nsamples": int(nsamples.get(name, 0)) if nsamples is not None else 0,
+            }
+            for name, value in sorted(activation_amax.items())
+        },
     }
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)

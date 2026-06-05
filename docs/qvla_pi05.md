@@ -1,7 +1,9 @@
 # QVLA for pi05 LIBERO PyTorch
 
-This workflow adapts QVLA-style training-free, weight-only fake quantization to
-the openpi `pi05_libero` PyTorch policy path.
+This workflow adapts QVLA-style training-free fake quantization to the openpi
+`pi05_libero` PyTorch policy path. Weight quantization uses QVLA channel-wise
+gate assignment, while activation quantization uses calibrated fixed-bit input
+activation fake quantization on the same target modules.
 
 It does not load OpenVLA checkpoints and does not modify the original checkpoint
 directory. The model must be an openpi-converted PyTorch checkpoint containing
@@ -114,7 +116,7 @@ uv run scripts/qvla_merge_proxy_shards.py \
   out/baselines/qvla/pi05_libero/proxy_shard_*.pt
 ```
 
-## 2. Assign Gates
+## 2. Assign Weight Gates
 
 ```bash
 uv run scripts/qvla_assign_gates.py \
@@ -127,17 +129,59 @@ uv run scripts/qvla_assign_gates.py \
 The output JSON stores channel-wise gates under `assign` and can be passed
 directly to policy loading.
 
-## 3. Serve Quantized Policy
+For a W4A4 run, reuse the same proxy and assign a second gate file:
+
+```bash
+uv run scripts/qvla_assign_gates.py \
+  --proxy-pt out/baselines/qvla/pi05_libero/proxy.pt \
+  --bits 0,2,4,8,16 \
+  --target-avg-bits 4.0 \
+  --out-json out/baselines/qvla/pi05_libero/gates_w4.json
+```
+
+## 3. Calibrate Activation Scales
+
+Activation calibration is a single forward pass over the fixed calibration set.
+It does not rebuild the per-layer Hessian proxy.
+
+```bash
+JAX_PLATFORMS=cpu uv run python scripts/qvla_pi05_activation_scales.py \
+  --config-name pi05_libero \
+  --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
+  --calib-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
+  --out-path out/baselines/qvla/pi05_libero/activation_amax.json \
+  --target pi05_backbones \
+  --device cuda:0 \
+  --max-samples 800
+```
+
+## 4. Serve Quantized Policy
+
+W8A8:
 
 ```bash
 JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
+  --qvla-activation-bits 8 \
+  --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax.json \
   policy:checkpoint \
   --policy.config pi05_libero \
   --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
 ```
 
-## 4. Run Fixed LIBERO Baseline Evaluation
+W4A4:
+
+```bash
+JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
+  --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w4.json \
+  --qvla-activation-bits 4 \
+  --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax.json \
+  policy:checkpoint \
+  --policy.config pi05_libero \
+  --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
+```
+
+## 5. Run Fixed LIBERO Baseline Evaluation
 
 The pi05 + QVLA baseline uses the same fixed sample selection as the other
 baselines:

@@ -57,6 +57,10 @@ class Args:
     qvla_target: _qvla.TargetPreset = "pi05_backbones"
     # How to handle gate length mismatches.
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median"
+    # Optional QVLA activation fake-quant bit width, e.g. 4 or 8.
+    qvla_activation_bits: int | None = None
+    # Optional calibrated activation max-abs scale file.
+    qvla_activation_scales_path: str | None = None
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
@@ -90,6 +94,8 @@ def create_default_policy(
     qvla_gates_path: str | None = None,
     qvla_target: _qvla.TargetPreset = "pi05_backbones",
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
+    qvla_activation_bits: int | None = None,
+    qvla_activation_scales_path: str | None = None,
 ) -> _policy.Policy:
     """Create a default policy for the given environment."""
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
@@ -100,6 +106,8 @@ def create_default_policy(
             qvla_gates_path=qvla_gates_path,
             qvla_target=qvla_target,
             qvla_mismatch_policy=qvla_mismatch_policy,
+            qvla_activation_bits=qvla_activation_bits,
+            qvla_activation_scales_path=qvla_activation_scales_path,
         )
     raise ValueError(f"Unsupported environment mode: {env}")
 
@@ -115,6 +123,8 @@ def create_policy(args: Args) -> _policy.Policy:
                 qvla_gates_path=args.qvla_gates_path,
                 qvla_target=args.qvla_target,
                 qvla_mismatch_policy=args.qvla_mismatch_policy,
+                qvla_activation_bits=args.qvla_activation_bits,
+                qvla_activation_scales_path=args.qvla_activation_scales_path,
             )
         case Default():
             return create_default_policy(
@@ -123,6 +133,8 @@ def create_policy(args: Args) -> _policy.Policy:
                 qvla_gates_path=args.qvla_gates_path,
                 qvla_target=args.qvla_target,
                 qvla_mismatch_policy=args.qvla_mismatch_policy,
+                qvla_activation_bits=args.qvla_activation_bits,
+                qvla_activation_scales_path=args.qvla_activation_scales_path,
             )
 
 

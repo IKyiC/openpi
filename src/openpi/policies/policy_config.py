@@ -26,6 +26,8 @@ def create_trained_policy(
     qvla_gates_path: pathlib.Path | str | None = None,
     qvla_target: _qvla.TargetPreset = "pi05_backbones",
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
+    qvla_activation_bits: int | None = None,
+    qvla_activation_scales_path: pathlib.Path | str | None = None,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -45,6 +47,10 @@ def create_trained_policy(
             already-loaded PyTorch model as weight-only fake quantization.
         qvla_target: Target module preset for QVLA gate application.
         qvla_mismatch_policy: How to handle gate length mismatches.
+        qvla_activation_bits: Optional activation bit width. When provided, target module input activations
+            are fake-quantized at inference time.
+        qvla_activation_scales_path: Optional calibrated activation max-abs scale file. If omitted,
+            activation scales are computed dynamically per tensor.
 
     Note:
         The function automatically detects whether the model is PyTorch-based by checking for the
@@ -69,9 +75,17 @@ def create_trained_policy(
                 mismatch_policy=qvla_mismatch_policy,
             )
             logging.info("Applied QVLA fake weight quantization: %s", report.summary())
+        if qvla_activation_bits is not None:
+            activation_report = _qvla.inject_activation_fake_quant(
+                model,
+                num_bits=qvla_activation_bits,
+                target=qvla_target,
+                activation_scales_path=qvla_activation_scales_path,
+            )
+            logging.info("Applied QVLA fake activation quantization: %s", activation_report.summary())
     else:
-        if qvla_gates_path is not None:
-            raise ValueError("QVLA fake weight quantization is only supported for PyTorch checkpoints.")
+        if qvla_gates_path is not None or qvla_activation_bits is not None:
+            raise ValueError("QVLA fake quantization is only supported for PyTorch checkpoints.")
         model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
