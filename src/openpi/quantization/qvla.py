@@ -663,7 +663,11 @@ def greedy_allocate(
         saving = current_bit - next_bit
         if saving <= 0:
             return
-        cost = float(proxies[layer_name][next_bit][channel_idx])
+        current_proxy = (
+            float(proxies[layer_name][current_bit][channel_idx]) if current_bit in proxies[layer_name] else 0.0
+        )
+        next_proxy = float(proxies[layer_name][next_bit][channel_idx])
+        cost = max(0.0, next_proxy - current_proxy)
         heapq.heappush(heap, (cost / saving, step_id, layer_name, channel_idx, next_bit))
         step_id += 1
 

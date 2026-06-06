@@ -100,6 +100,21 @@ def test_greedy_allocate_reduces_cheapest_channels_first():
     assert stats["final_avg_bits"] == 4.0
 
 
+def test_greedy_allocate_uses_incremental_proxy_costs():
+    proxies = {
+        "a": {
+            0: torch.tensor([32.0, 32.0]),
+            4: torch.tensor([32.0, 0.0]),
+            8: torch.zeros(2),
+        }
+    }
+
+    layer_bits, stats = qvla.greedy_allocate(proxies, [0, 4, 8], target_avg_bits=2.0)
+
+    assert layer_bits["a"] == [0, 4]
+    assert stats["final_avg_bits"] == 2.0
+
+
 def test_hessian_proxy_accepts_conv2d_valid_padding_string():
     layer = nn.Conv2d(3, 4, kernel_size=2, padding="valid", bias=False)
     proxy = qvla.HessianProxy(layer, device="cpu")
