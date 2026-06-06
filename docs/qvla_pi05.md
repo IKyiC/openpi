@@ -141,6 +141,19 @@ uv run scripts/qvla_assign_gates.py \
   --out-json out/baselines/qvla/pi05_libero/gates_w4.json
 ```
 
+If W4 allocation collapses the pi05 action expert, assign W4 gates only over
+the PaliGemma VLM backbone layers. This matches QVLA's OpenVLA target more
+closely because the action module is left unquantized:
+
+```bash
+uv run scripts/qvla_assign_gates.py \
+  --proxy-pt out/baselines/qvla/pi05_libero/proxy.pt \
+  --bits 0,2,4,8,16 \
+  --target-filter pi05_vlm_backbones \
+  --target-avg-bits 4.0 \
+  --out-json out/baselines/qvla/pi05_libero/gates_w4_vlm.json
+```
+
 ## 3. Calibrate Static Activation Scales
 
 The formal W8A8/W4A8 path uses static calibrated activation scales. The
@@ -185,7 +198,8 @@ W4A8:
 
 ```bash
 JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
-  --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w4.json \
+  --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w4_vlm.json \
+  --qvla-target pi05_vlm_backbones \
   --qvla-activation-bits 8 \
   --qvla-activation-granularity calibrated-tensor \
   --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax_w8_mse.json \
@@ -242,3 +256,11 @@ It excludes `multi_modal_projector`, `lm_head`, pi05 AdaRMS condition dense
 layers, and the small top-level action projection/time MLP layers. This keeps
 the adaptation close to QVLA's backbone quantization intent while including
 pi05's action expert transformer attention and MLP blocks.
+
+The `pi05_vlm_backbones` target applies fake quantization only to:
+
+- `paligemma_with_expert.paligemma.model.language_model.*`
+- `paligemma_with_expert.paligemma.model.vision_tower.*`
+
+Use this target for conservative W4A8 runs when the global allocator assigns
+nearly all `gemma_expert` channels to 0-bit.

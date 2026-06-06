@@ -24,16 +24,21 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
-TargetPreset = Literal["pi05_backbones", "all_linear_conv"]
+TargetPreset = Literal["pi05_backbones", "pi05_vlm_backbones", "pi05_action_expert", "all_linear_conv"]
 MismatchPolicy = Literal["median", "skip", "error"]
 ActivationGranularity = Literal["dynamic-token", "dynamic-tensor", "calibrated-tensor"]
 
 
-_PI05_TARGET_PREFIXES = (
+_PI05_VLM_TARGET_PREFIXES = (
     "paligemma_with_expert.paligemma.model.language_model.",
     "paligemma_with_expert.paligemma.model.vision_tower.",
+)
+
+_PI05_ACTION_EXPERT_TARGET_PREFIXES = (
     "paligemma_with_expert.gemma_expert.model.",
 )
+
+_PI05_TARGET_PREFIXES = _PI05_VLM_TARGET_PREFIXES + _PI05_ACTION_EXPERT_TARGET_PREFIXES
 
 _ALWAYS_EXCLUDE_NAME_PARTS = (
     ".lm_head",
@@ -105,6 +110,14 @@ def is_target_module(name: str, module: nn.Module, target: TargetPreset = "pi05_
         if any(part in name for part in _PI05_EXCLUDE_NAME_PARTS):
             return False
         return any(name.startswith(prefix) for prefix in _PI05_TARGET_PREFIXES)
+    if target == "pi05_vlm_backbones":
+        if any(part in name for part in _PI05_EXCLUDE_NAME_PARTS):
+            return False
+        return any(name.startswith(prefix) for prefix in _PI05_VLM_TARGET_PREFIXES)
+    if target == "pi05_action_expert":
+        if any(part in name for part in _PI05_EXCLUDE_NAME_PARTS):
+            return False
+        return any(name.startswith(prefix) for prefix in _PI05_ACTION_EXPERT_TARGET_PREFIXES)
 
     raise ValueError(f"Unknown QVLA target preset: {target}")
 
@@ -705,6 +718,41 @@ def load_proxy_file(proxy_path: str | pathlib.Path, bits: Iterable[int]) -> dict
         if layer_proxies:
             proxies[str(layer_name)] = layer_proxies
     return proxies
+
+
+def proxy_layer_matches_target(layer_name: str, target: TargetPreset) -> bool:
+    """Return whether a saved proxy layer belongs to a target preset."""
+
+    if any(part in layer_name for part in _ALWAYS_EXCLUDE_NAME_PARTS):
+        return False
+    if target == "all_linear_conv":
+        return True
+    if target == "pi05_backbones":
+        if any(part in layer_name for part in _PI05_EXCLUDE_NAME_PARTS):
+            return False
+        return any(layer_name.startswith(prefix) for prefix in _PI05_TARGET_PREFIXES)
+    if target == "pi05_vlm_backbones":
+        if any(part in layer_name for part in _PI05_EXCLUDE_NAME_PARTS):
+            return False
+        return any(layer_name.startswith(prefix) for prefix in _PI05_VLM_TARGET_PREFIXES)
+    if target == "pi05_action_expert":
+        if any(part in layer_name for part in _PI05_EXCLUDE_NAME_PARTS):
+            return False
+        return any(layer_name.startswith(prefix) for prefix in _PI05_ACTION_EXPERT_TARGET_PREFIXES)
+    raise ValueError(f"Unknown QVLA target preset: {target}")
+
+
+def filter_proxy_layers(
+    proxies: Mapping[str, Mapping[int, torch.Tensor]],
+    target: TargetPreset,
+) -> dict[str, dict[int, torch.Tensor]]:
+    """Filter saved proxy values to the layers covered by a target preset."""
+
+    return {
+        str(layer_name): {int(bit): tensor for bit, tensor in layer_proxy.items()}
+        for layer_name, layer_proxy in proxies.items()
+        if proxy_layer_matches_target(str(layer_name), target)
+    }
 
 
 def _next_lower_bit(bit_width: int, bit_list_desc: list[int]) -> int:

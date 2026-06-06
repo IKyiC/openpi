@@ -88,6 +88,14 @@ uv run scripts/qvla_assign_gates.py \
   --target-avg-bits 8.0 \
   --out-json out/baselines/qvla/pi05_libero/gates_w8.json
 
+# For W4A8 on pi05, prefer the VLM-only target if the all-backbone allocator
+# collapses the action expert to 0-bit.
+uv run scripts/qvla_assign_gates.py \
+  --proxy-pt out/baselines/qvla/pi05_libero/proxy.pt \
+  --target-filter pi05_vlm_backbones \
+  --target-avg-bits 4.0 \
+  --out-json out/baselines/qvla/pi05_libero/gates_w4_vlm.json
+
 uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
   --qvla-activation-bits 8 \

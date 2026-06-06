@@ -10,6 +10,10 @@ class _TinyPi05LikeModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.paligemma_with_expert = nn.Module()
+        self.paligemma_with_expert.paligemma = nn.Module()
+        self.paligemma_with_expert.paligemma.model = nn.Module()
+        self.paligemma_with_expert.paligemma.model.language_model = nn.Module()
+        self.paligemma_with_expert.paligemma.model.language_model.proj = nn.Linear(3, 2, bias=False)
         self.paligemma_with_expert.gemma_expert = nn.Module()
         self.paligemma_with_expert.gemma_expert.model = nn.Module()
         self.paligemma_with_expert.gemma_expert.model.proj = nn.Linear(3, 2, bias=False)
@@ -23,6 +27,26 @@ def test_load_gate_assignments_accepts_qvla_wrapper(tmp_path):
 
     assert list(gates) == ["layer"]
     assert gates["layer"].tolist() == [0, 4]
+
+
+def test_pi05_vlm_target_excludes_action_expert():
+    model = _TinyPi05LikeModel()
+
+    target_names = [name for name, _ in qvla.iter_target_modules(model, target="pi05_vlm_backbones")]
+
+    assert "paligemma_with_expert.paligemma.model.language_model.proj" in target_names
+    assert "paligemma_with_expert.gemma_expert.model.proj" not in target_names
+
+
+def test_filter_proxy_layers_can_exclude_action_expert():
+    proxies = {
+        "paligemma_with_expert.paligemma.model.language_model.proj": {8: torch.zeros(2)},
+        "paligemma_with_expert.gemma_expert.model.proj": {8: torch.zeros(2)},
+    }
+
+    filtered = qvla.filter_proxy_layers(proxies, "pi05_vlm_backbones")
+
+    assert list(filtered) == ["paligemma_with_expert.paligemma.model.language_model.proj"]
 
 
 def test_inject_weight_fake_quant_applies_channel_gates(tmp_path):
