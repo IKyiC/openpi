@@ -54,6 +54,15 @@ def main() -> None:
     parser.add_argument("--max-layers", type=int, default=None)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--num-steps", type=int, default=10, help="Flow denoising steps during calibration inference.")
+    parser.add_argument("--activation-bits", type=int, default=8, help="Activation bit width this scale file is for.")
+    parser.add_argument(
+        "--calibration-method",
+        default="mse",
+        choices=["mse", "max"],
+        help="Static activation clipping calibration. 'mse' minimizes histogram reconstruction error.",
+    )
+    parser.add_argument("--hist-bins", type=int, default=2048, help="Histogram bins for MSE activation calibration.")
+    parser.add_argument("--mse-grid-size", type=int, default=256, help="Candidate clipping thresholds for MSE search.")
     parser.add_argument(
         "--pytorch-compile-mode",
         default="none",
@@ -68,6 +77,12 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, force=True)
     if args.num_steps <= 0:
         raise ValueError("--num-steps must be positive")
+    if args.activation_bits <= 1 and args.activation_bits != 16:
+        raise ValueError("--activation-bits must be at least 2, or 16 for no activation fake quantization")
+    if args.hist_bins <= 0:
+        raise ValueError("--hist-bins must be positive")
+    if args.mse_grid_size <= 0:
+        raise ValueError("--mse-grid-size must be positive")
 
     train_config = _config.get_config(args.config_name)
     compile_mode = None if args.pytorch_compile_mode == "none" else args.pytorch_compile_mode
@@ -108,18 +123,40 @@ def main() -> None:
         raise ValueError("Provide --calib-jsonl, or use --fake-calib-samples for a smoke test.")
 
     logging.info(
-        "Calibrating QVLA activation scales: config=%s checkpoint=%s target=%s layers=%s samples=%s",
+        (
+            "Calibrating QVLA activation scales: config=%s checkpoint=%s target=%s "
+            "layers=%s samples=%s activation_bits=%s method=%s"
+        ),
         args.config_name,
         checkpoint_dir,
         args.target,
         len(target_modules),
         len(calib_examples),
+        args.activation_bits,
+        args.calibration_method,
     )
 
     activation_amax = {name: 0.0 for name, _ in target_modules}
     nsamples = {name: 0 for name, _ in target_modules}
-    handles = []
+    nvalues = {name: 0 for name, _ in target_modules}
 
+    rng = np.random.default_rng(args.seed)
+    action_shape = (train_config.model.action_horizon, train_config.model.action_dim)
+    # Reuse the exact same denoising noise in the max and histogram passes so
+    # the histogram range matches the observed activation maxima.
+    calibration_noises = [rng.standard_normal(action_shape).astype(np.float32) for _ in calib_examples]
+
+    def run_calibration_pass(desc: str) -> None:
+        with torch.no_grad():
+            for example, noise in tqdm(
+                zip(calib_examples, calibration_noises, strict=True),
+                desc=desc,
+                dynamic_ncols=True,
+                total=len(calib_examples),
+            ):
+                policy.infer(example, noise=noise)
+
+    handles = []
     for layer_name, module in target_modules:
 
         def _hook(
@@ -136,20 +173,65 @@ def main() -> None:
             value = float(first.detach().float().abs().max().cpu().item())
             if value > activation_amax[name]:
                 activation_amax[name] = value
-            nsamples[name] += int(first.shape[0]) if first.ndim > 0 else 1
+            nsamples[name] += 1
+            nvalues[name] += int(first.numel())
 
         handles.append(module.register_forward_pre_hook(_hook))
 
-    rng = np.random.default_rng(args.seed)
-    action_shape = (train_config.model.action_horizon, train_config.model.action_dim)
     try:
-        with torch.no_grad():
-            for example in tqdm(calib_examples, desc="[qvla-act-calib] samples", dynamic_ncols=True):
-                noise = rng.standard_normal(action_shape).astype(np.float32)
-                policy.infer(example, noise=noise)
+        run_calibration_pass("[qvla-act-calib] max")
     finally:
         for handle in handles:
             handle.remove()
+
+    if args.calibration_method == "mse":
+        activation_histograms = {
+            name: torch.zeros(args.hist_bins, dtype=torch.float64) for name, _ in target_modules
+        }
+
+        handles = []
+        for layer_name, module in target_modules:
+
+            def _hook(
+                _module: torch.nn.Module,
+                inputs: tuple[object, ...],
+                *,
+                name: str = layer_name,
+            ) -> None:
+                if not inputs:
+                    return
+                first = inputs[0]
+                if not torch.is_tensor(first) or not torch.is_floating_point(first):
+                    return
+                max_value = float(activation_amax[name])
+                if max_value <= 0.0:
+                    return
+                values = first.detach().float().abs()
+                hist = torch.histc(values, bins=args.hist_bins, min=0.0, max=max_value)
+                activation_histograms[name] += hist.to(dtype=torch.float64, device="cpu")
+
+            handles.append(module.register_forward_pre_hook(_hook))
+
+        try:
+            run_calibration_pass("[qvla-act-calib] hist")
+        finally:
+            for handle in handles:
+                handle.remove()
+
+        activation_amax = {
+            name: qvla.estimate_activation_amax_from_histogram(
+                activation_histograms[name],
+                max_value,
+                args.activation_bits,
+                grid_size=args.mse_grid_size,
+            )
+            for name, max_value in activation_amax.items()
+        }
+
+    nsamples = {
+        name: value
+        for name, value in nsamples.items()
+    }
 
     out_path = pathlib.Path(args.out_path).expanduser()
     qvla.save_activation_amax(
@@ -158,8 +240,17 @@ def main() -> None:
         samples=len(calib_examples),
         activation_amax=activation_amax,
         nsamples=nsamples,
+        activation_bits=args.activation_bits,
+        calibration_method=args.calibration_method,
+        hist_bins=args.hist_bins if args.calibration_method == "mse" else None,
+        mse_grid_size=args.mse_grid_size if args.calibration_method == "mse" else None,
     )
-    logging.info("Saved QVLA activation scales for %s layers to %s", len(activation_amax), out_path)
+    logging.info(
+        "Saved QVLA activation scales for %s layers to %s (values_seen=%s)",
+        len(activation_amax),
+        out_path,
+        sum(nvalues.values()),
+    )
 
 
 if __name__ == "__main__":

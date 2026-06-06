@@ -76,6 +76,35 @@ def test_inject_activation_fake_quant_quantizes_layer_inputs(tmp_path):
     assert torch.allclose(out[0, 0], torch.tensor(0.0))
 
 
+def test_calibrated_activation_scale_rejects_bit_mismatch(tmp_path):
+    model = _TinyPi05LikeModel()
+    path = tmp_path / "activation_amax.json"
+    path.write_text(
+        json.dumps(
+            {
+                "activation_bits": 4,
+                "activations": {
+                    "paligemma_with_expert.gemma_expert.model.proj": {
+                        "amax": 1.0,
+                    }
+                },
+            }
+        )
+    )
+
+    try:
+        qvla.inject_activation_fake_quant(
+            model,
+            num_bits=8,
+            activation_scales_path=path,
+            activation_granularity="calibrated-tensor",
+        )
+    except ValueError as exc:
+        assert "calibrated for 4 bits" in str(exc)
+    else:
+        raise AssertionError("Expected calibrated activation bit mismatch to fail")
+
+
 def test_dynamic_token_activation_quant_uses_row_local_scale():
     x = torch.tensor([[0.25, 0.75], [10.0, 20.0]])
 
@@ -83,6 +112,21 @@ def test_dynamic_token_activation_quant_uses_row_local_scale():
 
     assert torch.allclose(quantized[0], torch.tensor([0.0, 0.75]))
     assert torch.allclose(quantized[1], torch.tensor([0.0, 20.0]))
+
+
+def test_histogram_activation_calibration_can_clip_outlier():
+    histogram = torch.zeros(100)
+    histogram[0] = 100_000
+    histogram[-1] = 1
+
+    amax = qvla.estimate_activation_amax_from_histogram(
+        histogram,
+        max_abs=100.0,
+        num_bits=4,
+        grid_size=100,
+    )
+
+    assert 0.0 < amax < 100.0
 
 
 def test_greedy_allocate_reduces_cheapest_channels_first():

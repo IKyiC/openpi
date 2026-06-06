@@ -3,8 +3,9 @@
 This workflow adapts QVLA-style training-free fake quantization to the openpi
 `pi05_libero` PyTorch policy path. Weight quantization uses QVLA channel-wise
 gate assignment, while activation quantization uses fixed-bit input activation
-fake quantization on the same target modules. The recommended activation mode
-for pi05 is dynamic per-token/per-sample scaling (`dynamic-token`).
+fake quantization on the same target modules. The formal calibrated activation
+path uses static per-layer scales selected by histogram MSE calibration
+(`calibrated-tensor`).
 
 It does not load OpenVLA checkpoints and does not modify the original checkpoint
 directory. The model must be an openpi-converted PyTorch checkpoint containing
@@ -140,22 +141,30 @@ uv run scripts/qvla_assign_gates.py \
   --out-json out/baselines/qvla/pi05_libero/gates_w4.json
 ```
 
-## 3. Optional Static Activation Scale Calibration
+## 3. Calibrate Static Activation Scales
 
-The recommended W8A8/W4A4 path uses dynamic activation scales and does not need
-this step. For ablations that reproduce static per-layer activation scales,
-calibrate once over the fixed calibration set:
+The formal W8A8/W4A8 path uses static calibrated activation scales. The
+calibration script runs full policy inference on the fixed calibration set,
+collects input activation histograms for the quantized layers, and chooses a
+per-layer clipping value by minimizing reconstruction MSE.
+
+A8 scales:
 
 ```bash
 JAX_PLATFORMS=cpu uv run python scripts/qvla_pi05_activation_scales.py \
   --config-name pi05_libero \
   --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
   --calib-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
-  --out-path out/baselines/qvla/pi05_libero/activation_amax.json \
+  --out-path out/baselines/qvla/pi05_libero/activation_amax_w8_mse.json \
   --target pi05_backbones \
   --device cuda:0 \
-  --max-samples 800
+  --max-samples 800 \
+  --activation-bits 8 \
+  --calibration-method mse
 ```
+
+For A4 ablations, run the same command with `--activation-bits 4` and an
+output such as `activation_amax_w4_mse.json`.
 
 ## 4. Serve Quantized Policy
 
@@ -165,29 +174,33 @@ W8A8:
 JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
   --qvla-activation-bits 8 \
-  --qvla-activation-granularity dynamic-token \
+  --qvla-activation-granularity calibrated-tensor \
+  --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax_w8_mse.json \
   policy:checkpoint \
   --policy.config pi05_libero \
   --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
 ```
 
-W4A4:
+W4A8:
 
 ```bash
 JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w4.json \
-  --qvla-activation-bits 4 \
-  --qvla-activation-granularity dynamic-token \
+  --qvla-activation-bits 8 \
+  --qvla-activation-granularity calibrated-tensor \
+  --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax_w8_mse.json \
   policy:checkpoint \
   --policy.config pi05_libero \
   --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
 ```
 
-To run the static calibrated activation ablation, add:
+For W4A4, use `--qvla-activation-bits 4` with
+`activation_amax_w4_mse.json`.
+
+For dynamic-scale ablations, use:
 
 ```bash
---qvla-activation-granularity calibrated-tensor \
---qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax.json
+--qvla-activation-granularity dynamic-token
 ```
 
 ## 5. Run Fixed LIBERO Baseline Evaluation

@@ -91,7 +91,8 @@ uv run scripts/qvla_assign_gates.py \
 uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
   --qvla-activation-bits 8 \
-  --qvla-activation-granularity dynamic-token \
+  --qvla-activation-granularity calibrated-tensor \
+  --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax_w8_mse.json \
   policy:checkpoint \
   --policy.config pi05_libero \
   --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch

@@ -264,6 +264,62 @@ def fake_quantize_activation_sym(
 
 
 @torch.no_grad()
+def estimate_activation_amax_from_histogram(
+    histogram: torch.Tensor,
+    max_abs: float,
+    num_bits: int,
+    *,
+    grid_size: int = 256,
+) -> float:
+    """Estimate a static activation clipping value by minimizing histogram MSE.
+
+    The histogram is over ``abs(activation)`` values on ``[0, max_abs]``. The
+    returned value is the calibrated max-absolute value to use with symmetric
+    fake quantization.
+    """
+
+    if num_bits >= 16:
+        return float(max_abs)
+    if num_bits <= 1:
+        raise ValueError(f"activation bits must be at least 2 or 16, got {num_bits}")
+    if max_abs <= 0:
+        return 0.0
+
+    counts = histogram.detach().to(dtype=torch.float64, device="cpu").flatten()
+    if counts.numel() == 0 or float(counts.sum().item()) <= 0:
+        return float(max_abs)
+
+    bins = int(counts.numel())
+    max_value = float(max_abs)
+    bin_width = max_value / float(bins)
+    centers = (torch.arange(bins, dtype=torch.float64) + 0.5) * bin_width
+
+    grid_size = max(1, min(int(grid_size), bins))
+    candidate_indices = torch.linspace(1, bins, steps=grid_size, dtype=torch.float64).round().to(torch.int64)
+    candidate_indices = torch.unique(candidate_indices.clamp_(1, bins))
+    thresholds = candidate_indices.to(torch.float64) * bin_width
+
+    qmax = (1 << (num_bits - 1)) - 1
+    total_count = counts.sum().clamp_min(1.0)
+    best_amax = max_value
+    best_mse = float("inf")
+
+    # Keep the loop explicit to avoid a large thresholds x bins temporary when
+    # using fine histograms for hundreds of layers.
+    for threshold in thresholds:
+        scale = threshold / float(qmax)
+        clipped = centers.clamp(max=float(threshold.item()))
+        quantized = torch.round(clipped / scale).clamp_(min=0, max=qmax)
+        dequantized = quantized * scale
+        mse = float((((centers - dequantized) ** 2) * counts).sum().item() / float(total_count.item()))
+        if mse < best_mse:
+            best_mse = mse
+            best_amax = float(threshold.item())
+
+    return max(best_amax, 1e-8)
+
+
+@torch.no_grad()
 def apply_weight_only_fake_quant(
     module: nn.Module,
     gates: torch.Tensor,
@@ -347,7 +403,7 @@ def inject_weight_fake_quant(
     return report
 
 
-def _load_raw_activation_amax_file(scales_path: str | pathlib.Path) -> Mapping[str, Any]:
+def _load_activation_amax_payload(scales_path: str | pathlib.Path) -> Mapping[str, Any]:
     scales_path = pathlib.Path(scales_path).expanduser()
     if scales_path.suffix == ".pt":
         raw = torch.load(scales_path, map_location="cpu")
@@ -356,11 +412,27 @@ def _load_raw_activation_amax_file(scales_path: str | pathlib.Path) -> Mapping[s
             raw = json.load(f)
     if not isinstance(raw, Mapping):
         raise ValueError(f"Expected activation scale file to contain a mapping, got {type(raw)!r}")
+    return raw
+
+
+def _load_raw_activation_amax_file(scales_path: str | pathlib.Path) -> Mapping[str, Any]:
+    raw = _load_activation_amax_payload(scales_path)
     if isinstance(raw.get("activations"), Mapping):
         raw = raw["activations"]
     if isinstance(raw.get("activation_amax"), Mapping):
         raw = raw["activation_amax"]
     return raw
+
+
+def load_activation_amax_metadata(scales_path: str | pathlib.Path) -> dict[str, Any]:
+    """Load non-activation metadata from a calibrated activation scale file."""
+
+    raw = _load_activation_amax_payload(scales_path)
+    return {
+        str(key): value
+        for key, value in raw.items()
+        if key not in {"activations", "activation_amax"}
+    }
 
 
 def load_activation_amax(
@@ -429,11 +501,16 @@ def inject_activation_fake_quant(
 
     if activation_granularity == "calibrated-tensor" and activation_scales_path is None:
         raise ValueError("--qvla-activation-scales-path is required for calibrated-tensor activation quantization")
-    activation_amax = (
-        load_activation_amax(activation_scales_path)
-        if activation_granularity == "calibrated-tensor" and activation_scales_path is not None
-        else None
-    )
+    activation_amax = None
+    if activation_granularity == "calibrated-tensor" and activation_scales_path is not None:
+        metadata = load_activation_amax_metadata(activation_scales_path)
+        scale_bits = metadata.get("activation_bits")
+        if scale_bits is not None and int(scale_bits) != int(num_bits):
+            raise ValueError(
+                f"Activation scale file was calibrated for {scale_bits} bits, "
+                f"but {num_bits} bits were requested."
+            )
+        activation_amax = load_activation_amax(activation_scales_path)
     target_modules = iter_target_modules(model, target=target)
     missing_scale_layers: list[str] = []
     handles = []
@@ -740,6 +817,10 @@ def save_activation_amax(
     samples: int,
     activation_amax: Mapping[str, float],
     nsamples: Mapping[str, int] | None = None,
+    activation_bits: int | None = None,
+    calibration_method: str = "max_abs",
+    hist_bins: int | None = None,
+    mse_grid_size: int | None = None,
 ) -> None:
     """Save calibrated max-absolute activation values for target modules."""
 
@@ -747,7 +828,8 @@ def save_activation_amax(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "target": target,
-        "stat": "max_abs",
+        "stat": "calibrated_max_abs",
+        "calibration_method": calibration_method,
         "samples": int(samples),
         "activations": {
             str(name): {
@@ -757,5 +839,11 @@ def save_activation_amax(
             for name, value in sorted(activation_amax.items())
         },
     }
+    if activation_bits is not None:
+        payload["activation_bits"] = int(activation_bits)
+    if hist_bins is not None:
+        payload["hist_bins"] = int(hist_bins)
+    if mse_grid_size is not None:
+        payload["mse_grid_size"] = int(mse_grid_size)
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
