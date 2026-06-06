@@ -64,6 +64,8 @@ class Args:
     qvla_activation_bits: int | None = None
     # Optional calibrated activation max-abs scale file.
     qvla_activation_scales_path: str | None = None
+    # Activation quantization granularity.
+    qvla_activation_granularity: _qvla.ActivationGranularity = "dynamic-token"
     # torch.compile mode for PyTorch policies. Disabled by default for predictable serving startup.
     pytorch_compile_mode: PytorchCompileMode = "none"
 
@@ -112,6 +114,7 @@ def create_default_policy(
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
     qvla_activation_bits: int | None = None,
     qvla_activation_scales_path: str | None = None,
+    qvla_activation_granularity: _qvla.ActivationGranularity = "dynamic-token",
     pytorch_compile_mode: PytorchCompileMode = "none",
 ) -> _policy.Policy:
     """Create a default policy for the given environment."""
@@ -125,6 +128,7 @@ def create_default_policy(
             qvla_mismatch_policy=qvla_mismatch_policy,
             qvla_activation_bits=qvla_activation_bits,
             qvla_activation_scales_path=qvla_activation_scales_path,
+            qvla_activation_granularity=qvla_activation_granularity,
         )
     raise ValueError(f"Unsupported environment mode: {env}")
 
@@ -142,6 +146,7 @@ def create_policy(args: Args) -> _policy.Policy:
                 qvla_mismatch_policy=args.qvla_mismatch_policy,
                 qvla_activation_bits=args.qvla_activation_bits,
                 qvla_activation_scales_path=args.qvla_activation_scales_path,
+                qvla_activation_granularity=args.qvla_activation_granularity,
             )
         case Default():
             return create_default_policy(
@@ -152,6 +157,7 @@ def create_policy(args: Args) -> _policy.Policy:
                 qvla_mismatch_policy=args.qvla_mismatch_policy,
                 qvla_activation_bits=args.qvla_activation_bits,
                 qvla_activation_scales_path=args.qvla_activation_scales_path,
+                qvla_activation_granularity=args.qvla_activation_granularity,
                 pytorch_compile_mode=args.pytorch_compile_mode,
             )
 

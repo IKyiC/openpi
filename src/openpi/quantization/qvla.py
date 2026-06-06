@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 TargetPreset = Literal["pi05_backbones", "all_linear_conv"]
 MismatchPolicy = Literal["median", "skip", "error"]
+ActivationGranularity = Literal["dynamic-token", "dynamic-tensor", "calibrated-tensor"]
 
 
 _PI05_TARGET_PREFIXES = (
@@ -73,6 +74,7 @@ class ActivationInjectionReport:
     """Summary of an activation fake-quant hook injection pass."""
 
     activation_bits: int
+    activation_granularity: ActivationGranularity
     target_layers: int
     injected_layers: int
     scale_layers: int
@@ -81,6 +83,7 @@ class ActivationInjectionReport:
     def summary(self) -> str:
         return (
             f"activation_bits={self.activation_bits}, "
+            f"activation_granularity={self.activation_granularity}, "
             f"target_layers={self.target_layers}, "
             f"injected_layers={self.injected_layers}, "
             f"scale_layers={self.scale_layers}, "
@@ -222,11 +225,13 @@ def fake_quantize_activation_sym(
     num_bits: int,
     *,
     amax: torch.Tensor | float | None = None,
+    granularity: ActivationGranularity = "dynamic-token",
 ) -> torch.Tensor:
     """Symmetric activation fake quantization.
 
-    If ``amax`` is provided it is treated as a calibrated max-absolute activation
-    value. Otherwise the scale is computed dynamically from the current tensor.
+    ``dynamic-token`` uses a separate scale for each token/row for Linear inputs
+    and each sample for Conv2d inputs. ``calibrated-tensor`` uses a precomputed
+    layer-wide max-absolute activation value.
     """
 
     if num_bits >= 16:
@@ -236,11 +241,25 @@ def fake_quantize_activation_sym(
     if not torch.is_floating_point(x):
         return x
 
-    if amax is None:
-        return fake_quantize_tensor_sym(x, num_bits)
-
     qmax = (1 << (num_bits - 1)) - 1
-    quant_scale = torch.as_tensor(amax, device=x.device, dtype=torch.float32).clamp_min(1e-8) / float(qmax)
+    if granularity == "calibrated-tensor":
+        if amax is None:
+            return fake_quantize_tensor_sym(x, num_bits)
+        quant_scale = torch.as_tensor(amax, device=x.device, dtype=torch.float32).clamp_min(1e-8) / float(qmax)
+    elif granularity == "dynamic-tensor":
+        quant_scale = x.float().abs().max().clamp_min(1e-8) / float(qmax)
+    elif granularity == "dynamic-token":
+        work = x.float()
+        if work.ndim >= 4:
+            reduce_dims = tuple(range(1, work.ndim))
+            amax_dynamic = work.abs().amax(dim=reduce_dims, keepdim=True)
+        elif work.ndim >= 2:
+            amax_dynamic = work.abs().amax(dim=-1, keepdim=True)
+        else:
+            amax_dynamic = work.abs().max()
+        quant_scale = amax_dynamic.clamp_min(1e-8) / float(qmax)
+    else:
+        raise ValueError(f"Unknown activation granularity: {granularity}")
     return fake_quantize_tensor_sym(x, num_bits, scale=quant_scale)
 
 
@@ -391,6 +410,7 @@ def inject_activation_fake_quant(
     num_bits: int,
     target: TargetPreset = "pi05_backbones",
     activation_scales_path: str | pathlib.Path | None = None,
+    activation_granularity: ActivationGranularity = "dynamic-token",
 ) -> ActivationInjectionReport:
     """Register forward pre-hooks that fake-quantize target layer input activations."""
 
@@ -398,6 +418,7 @@ def inject_activation_fake_quant(
         target_layers = len(iter_target_modules(model, target=target))
         return ActivationInjectionReport(
             activation_bits=int(num_bits),
+            activation_granularity=activation_granularity,
             target_layers=target_layers,
             injected_layers=0,
             scale_layers=0,
@@ -406,7 +427,13 @@ def inject_activation_fake_quant(
     if num_bits <= 1:
         raise ValueError(f"activation bits must be at least 2 or 16, got {num_bits}")
 
-    activation_amax = load_activation_amax(activation_scales_path) if activation_scales_path is not None else None
+    if activation_granularity == "calibrated-tensor" and activation_scales_path is None:
+        raise ValueError("--qvla-activation-scales-path is required for calibrated-tensor activation quantization")
+    activation_amax = (
+        load_activation_amax(activation_scales_path)
+        if activation_granularity == "calibrated-tensor" and activation_scales_path is not None
+        else None
+    )
     target_modules = iter_target_modules(model, target=target)
     missing_scale_layers: list[str] = []
     handles = []
@@ -423,12 +450,18 @@ def inject_activation_fake_quant(
             *,
             activation_amax_ref: torch.Tensor | None = amax,
             activation_bits: int = int(num_bits),
+            granularity_ref: ActivationGranularity = activation_granularity,
         ) -> tuple[object, ...]:
             if not inputs:
                 return inputs
             first, *rest = inputs
             if torch.is_tensor(first):
-                first = fake_quantize_activation_sym(first, activation_bits, amax=activation_amax_ref)
+                first = fake_quantize_activation_sym(
+                    first,
+                    activation_bits,
+                    amax=activation_amax_ref,
+                    granularity=granularity_ref,
+                )
             return (first, *rest)
 
         handles.append(module.register_forward_pre_hook(_hook))
@@ -438,6 +471,7 @@ def inject_activation_fake_quant(
 
     report = ActivationInjectionReport(
         activation_bits=int(num_bits),
+        activation_granularity=activation_granularity,
         target_layers=len(target_modules),
         injected_layers=len(handles),
         scale_layers=0 if activation_amax is None else len(activation_amax),

@@ -88,18 +88,10 @@ uv run scripts/qvla_assign_gates.py \
   --target-avg-bits 8.0 \
   --out-json out/baselines/qvla/pi05_libero/gates_w8.json
 
-uv run scripts/qvla_pi05_activation_scales.py \
-  --config-name pi05_libero \
-  --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
-  --calib-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
-  --out-path out/baselines/qvla/pi05_libero/activation_amax.json \
-  --target pi05_backbones \
-  --max-samples 800
-
 uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
   --qvla-activation-bits 8 \
-  --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax.json \
+  --qvla-activation-granularity dynamic-token \
   policy:checkpoint \
   --policy.config pi05_libero \
   --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch

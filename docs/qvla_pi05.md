@@ -2,8 +2,9 @@
 
 This workflow adapts QVLA-style training-free fake quantization to the openpi
 `pi05_libero` PyTorch policy path. Weight quantization uses QVLA channel-wise
-gate assignment, while activation quantization uses calibrated fixed-bit input
-activation fake quantization on the same target modules.
+gate assignment, while activation quantization uses fixed-bit input activation
+fake quantization on the same target modules. The recommended activation mode
+for pi05 is dynamic per-token/per-sample scaling (`dynamic-token`).
 
 It does not load OpenVLA checkpoints and does not modify the original checkpoint
 directory. The model must be an openpi-converted PyTorch checkpoint containing
@@ -139,10 +140,11 @@ uv run scripts/qvla_assign_gates.py \
   --out-json out/baselines/qvla/pi05_libero/gates_w4.json
 ```
 
-## 3. Calibrate Activation Scales
+## 3. Optional Static Activation Scale Calibration
 
-Activation calibration is a single forward pass over the fixed calibration set.
-It does not rebuild the per-layer Hessian proxy.
+The recommended W8A8/W4A4 path uses dynamic activation scales and does not need
+this step. For ablations that reproduce static per-layer activation scales,
+calibrate once over the fixed calibration set:
 
 ```bash
 JAX_PLATFORMS=cpu uv run python scripts/qvla_pi05_activation_scales.py \
@@ -163,7 +165,7 @@ W8A8:
 JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
   --qvla-activation-bits 8 \
-  --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax.json \
+  --qvla-activation-granularity dynamic-token \
   policy:checkpoint \
   --policy.config pi05_libero \
   --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
@@ -175,10 +177,17 @@ W4A4:
 JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w4.json \
   --qvla-activation-bits 4 \
-  --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax.json \
+  --qvla-activation-granularity dynamic-token \
   policy:checkpoint \
   --policy.config pi05_libero \
   --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
+```
+
+To run the static calibrated activation ablation, add:
+
+```bash
+--qvla-activation-granularity calibrated-tensor \
+--qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax.json
 ```
 
 ## 5. Run Fixed LIBERO Baseline Evaluation

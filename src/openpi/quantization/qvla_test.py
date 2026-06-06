@@ -64,11 +64,25 @@ def test_inject_activation_fake_quant_quantizes_layer_inputs(tmp_path):
         )
     )
 
-    report = qvla.inject_activation_fake_quant(model, num_bits=2, activation_scales_path=path)
+    report = qvla.inject_activation_fake_quant(
+        model,
+        num_bits=2,
+        activation_scales_path=path,
+        activation_granularity="calibrated-tensor",
+    )
     out = layer(torch.tensor([[0.25, 0.75, -0.75]]))
 
     assert report.injected_layers == 1
     assert torch.allclose(out[0, 0], torch.tensor(0.0))
+
+
+def test_dynamic_token_activation_quant_uses_row_local_scale():
+    x = torch.tensor([[0.25, 0.75], [10.0, 20.0]])
+
+    quantized = qvla.fake_quantize_activation_sym(x, 2, granularity="dynamic-token")
+
+    assert torch.allclose(quantized[0], torch.tensor([0.0, 0.75]))
+    assert torch.allclose(quantized[1], torch.tensor([0.0, 20.0]))
 
 
 def test_greedy_allocate_reduces_cheapest_channels_first():

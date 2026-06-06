@@ -28,6 +28,7 @@ def create_trained_policy(
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
     qvla_activation_bits: int | None = None,
     qvla_activation_scales_path: pathlib.Path | str | None = None,
+    qvla_activation_granularity: _qvla.ActivationGranularity = "dynamic-token",
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -50,7 +51,9 @@ def create_trained_policy(
         qvla_activation_bits: Optional activation bit width. When provided, target module input activations
             are fake-quantized at inference time.
         qvla_activation_scales_path: Optional calibrated activation max-abs scale file. If omitted,
-            activation scales are computed dynamically per tensor.
+            activation scales are computed dynamically.
+        qvla_activation_granularity: Activation scale granularity. The recommended default is
+            ``dynamic-token``; ``calibrated-tensor`` reproduces the static activation scale path.
 
     Note:
         The function automatically detects whether the model is PyTorch-based by checking for the
@@ -81,6 +84,7 @@ def create_trained_policy(
                 num_bits=qvla_activation_bits,
                 target=qvla_target,
                 activation_scales_path=qvla_activation_scales_path,
+                activation_granularity=qvla_activation_granularity,
             )
             logging.info("Applied QVLA fake activation quantization: %s", activation_report.summary())
     else:
