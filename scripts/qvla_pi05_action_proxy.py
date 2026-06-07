@@ -1,9 +1,8 @@
-"""Build QVLA action-space Taylor proxy sensitivities for openpi pi05 LIBERO policies.
+"""Build experimental action-space Taylor proxy sensitivities for pi05 LIBERO.
 
-This is the paper-faithful proxy path: each channel-bit proxy estimates the
-final action-space deviation caused by quantizing that output channel. It uses a
-first-order Taylor/Jacobian proxy with Hutchinson random projections of the
-action vector, instead of the cheaper input-covariance Hessian proxy.
+This script is not the official QVLA public-code path. The official QVLA
+repository builds gates with ``sensitivity_hessian_proxy.py``. Keep this script
+only for exploratory ablations.
 """
 
 from __future__ import annotations

@@ -788,11 +788,12 @@ def greedy_allocate(
         saving = current_bit - next_bit
         if saving <= 0:
             return
-        current_proxy = (
-            float(proxies[layer_name][current_bit][channel_idx]) if current_bit in proxies[layer_name] else 0.0
-        )
         next_proxy = float(proxies[layer_name][next_bit][channel_idx])
-        cost = max(0.0, next_proxy - current_proxy)
+        # Match the official QVLA assign_gates_from_sensitivity.py behavior:
+        # each demotion is ranked by the absolute proxy loss of the target bit,
+        # normalized by the saved bit-width. It is intentionally not an
+        # incremental loss against the current bit.
+        cost = next_proxy
         heapq.heappush(heap, (cost / saving, step_id, layer_name, channel_idx, next_bit))
         step_id += 1
 

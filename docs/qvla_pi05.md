@@ -1,11 +1,11 @@
 # QVLA for pi05 LIBERO PyTorch
 
-This workflow adapts QVLA-style training-free fake quantization to the openpi
-`pi05_libero` PyTorch policy path. Weight quantization uses QVLA channel-wise
-gate assignment, while activation quantization uses fixed-bit input activation
-fake quantization on the same target modules. The formal calibrated activation
-path uses static per-layer scales selected by histogram MSE calibration
-(`calibrated-tensor`).
+This workflow adapts the public QVLA repository workflow to the openpi
+`pi05_libero` PyTorch policy path. The official QVLA code path is:
+Hessian/input-covariance proxy sensitivity, greedy channel-wise bit assignment,
+and weight fake quantization on VLM backbone Linear/Conv2d layers. Activation
+fake quantization is provided here only for W8A8/W4A8 evaluation settings; it is
+not part of the public `inject_fake_w.py` path.
 
 It does not load OpenVLA checkpoints and does not modify the original checkpoint
 directory. The model must be an openpi-converted PyTorch checkpoint containing
@@ -71,12 +71,12 @@ Accepted aliases:
 - state: `observation/state`, `state`
 - prompt: `prompt`, `text`, `language_instruction`
 
-## 1. Build Hessian Proxy
+## 1. Build Official QVLA Proxy
 
 Run this on the Linux server with the converted PyTorch checkpoint available.
-This command is the fast input-covariance proxy path. It is useful for smoke
-tests and ablations, but the stricter QVLA action-space proxy is described in
-the next section.
+This mirrors the public QVLA `sensitivity_hessian_proxy.py` implementation:
+collect target-layer input statistics, compute the damped inverse-Hessian proxy,
+and score each output channel under candidate bit-widths.
 
 ```bash
 JAX_PLATFORMS=cpu uv run scripts/qvla_pi05_hessian_proxy.py \
@@ -85,7 +85,7 @@ JAX_PLATFORMS=cpu uv run scripts/qvla_pi05_hessian_proxy.py \
   --calib-jsonl /path/to/libero_calib.jsonl \
   --out-path out/baselines/qvla/pi05_libero/proxy.pt \
   --bits 0,2,4,8,16 \
-  --target pi05_backbones \
+  --target pi05_vlm_backbones \
   --device cuda:0 \
   --max-samples 800
 ```
@@ -108,7 +108,7 @@ for i in 0 1 2 3; do
     --calib-jsonl /path/to/libero_calib.jsonl \
     --out-path out/baselines/qvla/pi05_libero/proxy_shard_${i}.pt \
     --bits 0,2,4,8,16 \
-    --target pi05_backbones \
+    --target pi05_vlm_backbones \
     --device cuda:0 \
     --max-samples 800 \
     --num-layer-shards 4 \
@@ -121,70 +121,9 @@ uv run scripts/qvla_merge_proxy_shards.py \
   out/baselines/qvla/pi05_libero/proxy_shard_*.pt
 ```
 
-## 1b. Build Action-Space Proxy
-
-The paper-faithful QVLA path estimates sensitivity in action space. For each
-target layer, this script measures how quantizing each output channel changes
-the final sampled action, using a first-order Taylor/Jacobian proxy with random
-action projections. This is much slower than the Hessian/input-covariance proxy,
-so use layer sharding across GPUs.
-
-Single-GPU smoke test:
-
-```bash
-JAX_PLATFORMS=cpu uv run python scripts/qvla_pi05_action_proxy.py \
-  --config-name pi05_libero \
-  --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
-  --calib-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
-  --out-path out/baselines/qvla/pi05_libero/action_proxy_smoke.pt \
-  --bits 0,2,4,8,16 \
-  --target pi05_vlm_backbones \
-  --device cuda:0 \
-  --max-samples 2 \
-  --max-layers 1 \
-  --num-probes 1
-```
-
-Multi-GPU run:
-
-```bash
-export CKPT=~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
-export CALIB=out/baselines/libero_fixed_calib/calib.jsonl
-export OUT=out/baselines/qvla/pi05_libero/action_proxy_vlm
-mkdir -p $OUT
-
-GPU_IDS=(1 3 4 5)
-NGPUS=${#GPU_IDS[@]}
-for idx in "${!GPU_IDS[@]}"; do
-  gpu=${GPU_IDS[$idx]}
-  CUDA_VISIBLE_DEVICES=$gpu JAX_PLATFORMS=cpu PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false \
-  uv run python scripts/qvla_pi05_action_proxy.py \
-    --config-name pi05_libero \
-    --checkpoint-dir $CKPT \
-    --calib-jsonl $CALIB \
-    --out-path $OUT/action_proxy_shard_${idx}.pt \
-    --bits 0,2,4,8,16 \
-    --target pi05_vlm_backbones \
-    --device cuda:0 \
-    --max-samples 128 \
-    --num-probes 1 \
-    --save-every 1 \
-    --num-layer-shards $NGPUS \
-    --layer-shard-index $idx \
-    > $OUT/action_proxy_shard_${idx}.log 2>&1 &
-  sleep 20
-done
-wait
-
-uv run python scripts/qvla_merge_proxy_shards.py \
-  --out-path out/baselines/qvla/pi05_libero/action_proxy_vlm.pt \
-  $OUT/action_proxy_shard_*.pt
-```
-
-After the 128-sample run is validated, increase `--max-samples` to 800 for the
-full paper-faithful proxy. The action-space proxy is substantially slower than
-the Hessian/input-covariance proxy because it runs differentiable action
-sampling and backward passes.
+`scripts/qvla_pi05_action_proxy.py` exists only as a non-official exploratory
+ablation. Do not use it for the official QVLA baseline unless the experiment is
+explicitly labeled as such.
 
 ## 2. Assign Weight Gates
 
@@ -192,6 +131,7 @@ sampling and backward passes.
 uv run scripts/qvla_assign_gates.py \
   --proxy-pt out/baselines/qvla/pi05_libero/proxy.pt \
   --bits 0,2,4,8,16 \
+  --target-filter pi05_vlm_backbones \
   --target-avg-bits 8.0 \
   --out-json out/baselines/qvla/pi05_libero/gates_w8.json
 ```
@@ -199,30 +139,7 @@ uv run scripts/qvla_assign_gates.py \
 The output JSON stores channel-wise gates under `assign` and can be passed
 directly to policy loading.
 
-For the action-space proxy, use `action_proxy_vlm.pt` instead of `proxy.pt`:
-
-```bash
-uv run python scripts/qvla_assign_gates.py \
-  --proxy-pt out/baselines/qvla/pi05_libero/action_proxy_vlm.pt \
-  --bits 0,2,4,8,16 \
-  --target-filter pi05_vlm_backbones \
-  --target-avg-bits 8.0 \
-  --out-json out/baselines/qvla/pi05_libero/gates_w8_vlm_action.json
-```
-
 For a W4A4 run, reuse the same proxy and assign a second gate file:
-
-```bash
-uv run scripts/qvla_assign_gates.py \
-  --proxy-pt out/baselines/qvla/pi05_libero/proxy.pt \
-  --bits 0,2,4,8,16 \
-  --target-avg-bits 4.0 \
-  --out-json out/baselines/qvla/pi05_libero/gates_w4.json
-```
-
-If W4 allocation collapses the pi05 action expert, assign W4 gates only over
-the PaliGemma VLM backbone layers. This matches QVLA's OpenVLA target more
-closely because the action module is left unquantized:
 
 ```bash
 uv run scripts/qvla_assign_gates.py \
@@ -248,7 +165,7 @@ JAX_PLATFORMS=cpu uv run python scripts/qvla_pi05_activation_scales.py \
   --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
   --calib-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
   --out-path out/baselines/qvla/pi05_libero/activation_amax_w8_mse.json \
-  --target pi05_backbones \
+  --target pi05_vlm_backbones \
   --device cuda:0 \
   --max-samples 800 \
   --activation-bits 8 \
@@ -265,6 +182,7 @@ W8A8:
 ```bash
 JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
+  --qvla-target pi05_vlm_backbones \
   --qvla-activation-bits 8 \
   --qvla-activation-granularity calibrated-tensor \
   --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax_w8_mse.json \
@@ -325,21 +243,21 @@ python examples/libero/main.py \
 
 ## Target Preset
 
-The default `pi05_backbones` target applies fake quantization to:
+The official-QVLA-equivalent pi05 target is `pi05_vlm_backbones`. It applies
+fake quantization only to:
+
+- `paligemma_with_expert.paligemma.model.language_model.*`
+- `paligemma_with_expert.paligemma.model.vision_tower.*`
+
+This mirrors the public QVLA target pattern: `language_model.*` and
+`vision_backbone.*`, while excluding projector/action-head style modules.
+
+The broader `pi05_backbones` target also includes:
 
 - `paligemma_with_expert.paligemma.model.language_model.*`
 - `paligemma_with_expert.paligemma.model.vision_tower.*`
 - `paligemma_with_expert.gemma_expert.model.*`
 
 It excludes `multi_modal_projector`, `lm_head`, pi05 AdaRMS condition dense
-layers, and the small top-level action projection/time MLP layers. This keeps
-the adaptation close to QVLA's backbone quantization intent while including
-pi05's action expert transformer attention and MLP blocks.
-
-The `pi05_vlm_backbones` target applies fake quantization only to:
-
-- `paligemma_with_expert.paligemma.model.language_model.*`
-- `paligemma_with_expert.paligemma.model.vision_tower.*`
-
-Use this target for conservative W4A8 runs when the global allocator assigns
-nearly all `gemma_expert` channels to 0-bit.
+layers, and the small top-level action projection/time MLP layers. Treat this
+broader target as an ablation, not the official QVLA-equivalent baseline.

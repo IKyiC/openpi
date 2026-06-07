@@ -81,15 +81,15 @@ uv run scripts/qvla_pi05_hessian_proxy.py \
   --config-name pi05_libero \
   --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
   --calib-jsonl /path/to/libero_calib.jsonl \
-  --out-path out/baselines/qvla/pi05_libero/proxy.pt
+  --out-path out/baselines/qvla/pi05_libero/proxy.pt \
+  --target pi05_vlm_backbones
 
 uv run scripts/qvla_assign_gates.py \
   --proxy-pt out/baselines/qvla/pi05_libero/proxy.pt \
+  --target-filter pi05_vlm_backbones \
   --target-avg-bits 8.0 \
   --out-json out/baselines/qvla/pi05_libero/gates_w8.json
 
-# For W4A8 on pi05, prefer the VLM-only target if the all-backbone allocator
-# collapses the action expert to 0-bit.
 uv run scripts/qvla_assign_gates.py \
   --proxy-pt out/baselines/qvla/pi05_libero/proxy.pt \
   --target-filter pi05_vlm_backbones \
@@ -98,6 +98,7 @@ uv run scripts/qvla_assign_gates.py \
 
 uv run scripts/serve_policy.py \
   --qvla-gates-path out/baselines/qvla/pi05_libero/gates_w8.json \
+  --qvla-target pi05_vlm_backbones \
   --qvla-activation-bits 8 \
   --qvla-activation-granularity calibrated-tensor \
   --qvla-activation-scales-path out/baselines/qvla/pi05_libero/activation_amax_w8_mse.json \
@@ -110,9 +111,10 @@ For multi-GPU proxy generation, shard target layers across jobs with
 `--num-layer-shards` and `--layer-shard-index`, then merge with
 `scripts/qvla_merge_proxy_shards.py`.
 
-The strict QVLA pi05 path should use the action-space proxy script:
-`scripts/qvla_pi05_action_proxy.py`. The older
-`scripts/qvla_pi05_hessian_proxy.py` is a faster input-covariance ablation.
+The official QVLA public-code path uses the Hessian/input-covariance proxy
+implemented by `scripts/qvla_pi05_hessian_proxy.py`. The optional
+`scripts/qvla_pi05_action_proxy.py` script is experimental and should not be
+reported as the official QVLA baseline.
 
 OMEGAQVLA + pi05 should get its own branch and scripts/module names, for
 example:

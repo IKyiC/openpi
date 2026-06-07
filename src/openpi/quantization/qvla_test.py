@@ -168,7 +168,7 @@ def test_greedy_allocate_reduces_cheapest_channels_first():
     assert stats["final_avg_bits"] == 4.0
 
 
-def test_greedy_allocate_uses_incremental_proxy_costs():
+def test_greedy_allocate_matches_official_absolute_proxy_costs():
     proxies = {
         "a": {
             0: torch.tensor([32.0, 32.0]),
@@ -179,7 +179,7 @@ def test_greedy_allocate_uses_incremental_proxy_costs():
 
     layer_bits, stats = qvla.greedy_allocate(proxies, [0, 4, 8], target_avg_bits=2.0)
 
-    assert layer_bits["a"] == [0, 4]
+    assert layer_bits["a"] == [4, 0]
     assert stats["final_avg_bits"] == 2.0
 
 

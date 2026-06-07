@@ -161,7 +161,7 @@ def main() -> None:
     parser.add_argument("--bits", default="0,2,4,8,16", help="Candidate bit widths.")
     parser.add_argument(
         "--target",
-        default="pi05_backbones",
+        default="pi05_vlm_backbones",
         choices=["pi05_backbones", "pi05_vlm_backbones", "pi05_action_expert", "all_linear_conv"],
     )
     parser.add_argument("--max-samples", type=int, default=32)

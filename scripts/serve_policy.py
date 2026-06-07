@@ -57,7 +57,7 @@ class Args:
     # Optional QVLA gate assignment file for PyTorch checkpoints.
     qvla_gates_path: str | None = None
     # Target module preset used when applying QVLA gates.
-    qvla_target: _qvla.TargetPreset = "pi05_backbones"
+    qvla_target: _qvla.TargetPreset = "pi05_vlm_backbones"
     # How to handle gate length mismatches.
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median"
     # Optional QVLA activation fake-quant bit width, e.g. 4 or 8.
@@ -110,7 +110,7 @@ def create_default_policy(
     *,
     default_prompt: str | None = None,
     qvla_gates_path: str | None = None,
-    qvla_target: _qvla.TargetPreset = "pi05_backbones",
+    qvla_target: _qvla.TargetPreset = "pi05_vlm_backbones",
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
     qvla_activation_bits: int | None = None,
     qvla_activation_scales_path: str | None = None,

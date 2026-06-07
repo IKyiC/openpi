@@ -24,7 +24,7 @@ def create_trained_policy(
     norm_stats: dict[str, transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
     qvla_gates_path: pathlib.Path | str | None = None,
-    qvla_target: _qvla.TargetPreset = "pi05_backbones",
+    qvla_target: _qvla.TargetPreset = "pi05_vlm_backbones",
     qvla_mismatch_policy: _qvla.MismatchPolicy = "median",
     qvla_activation_bits: int | None = None,
     qvla_activation_scales_path: pathlib.Path | str | None = None,

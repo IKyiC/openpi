@@ -18,9 +18,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--target-filter",
-        default="all_linear_conv",
+        default="pi05_vlm_backbones",
         choices=["all_linear_conv", "pi05_backbones", "pi05_vlm_backbones", "pi05_action_expert"],
-        help="Filter proxy layers before assigning gates. Use pi05_vlm_backbones to exclude the pi05 action expert.",
+        help="Filter proxy layers before assigning gates. pi05_vlm_backbones matches the official QVLA target pattern.",
     )
     parser.add_argument("--target-avg-bits", type=float, default=8.0, help="Target global average bit width.")
     parser.add_argument("--out-json", required=True, help="Output gate assignment JSON.")
