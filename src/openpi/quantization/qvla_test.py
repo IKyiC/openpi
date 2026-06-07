@@ -14,6 +14,8 @@ class _TinyPi05LikeModel(nn.Module):
         self.paligemma_with_expert.paligemma.model = nn.Module()
         self.paligemma_with_expert.paligemma.model.language_model = nn.Module()
         self.paligemma_with_expert.paligemma.model.language_model.proj = nn.Linear(3, 2, bias=False)
+        self.paligemma_with_expert.paligemma.model.vision_tower = nn.Module()
+        self.paligemma_with_expert.paligemma.model.vision_tower.proj = nn.Linear(3, 2, bias=False)
         self.paligemma_with_expert.gemma_expert = nn.Module()
         self.paligemma_with_expert.gemma_expert.model = nn.Module()
         self.paligemma_with_expert.gemma_expert.model.proj = nn.Linear(3, 2, bias=False)
@@ -35,7 +37,16 @@ def test_pi05_vlm_target_excludes_action_expert():
     target_names = [name for name, _ in qvla.iter_target_modules(model, target="pi05_vlm_backbones")]
 
     assert "paligemma_with_expert.paligemma.model.language_model.proj" in target_names
+    assert "paligemma_with_expert.paligemma.model.vision_tower.proj" in target_names
     assert "paligemma_with_expert.gemma_expert.model.proj" not in target_names
+
+
+def test_pi05_llm_target_excludes_vision_and_action_expert():
+    model = _TinyPi05LikeModel()
+
+    target_names = [name for name, _ in qvla.iter_target_modules(model, target="pi05_llm_backbone")]
+
+    assert target_names == ["paligemma_with_expert.paligemma.model.language_model.proj"]
 
 
 def test_filter_proxy_layers_can_exclude_action_expert():

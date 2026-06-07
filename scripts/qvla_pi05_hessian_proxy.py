@@ -162,7 +162,7 @@ def main() -> None:
     parser.add_argument(
         "--target",
         default="pi05_vlm_backbones",
-        choices=["pi05_backbones", "pi05_vlm_backbones", "pi05_action_expert", "all_linear_conv"],
+        choices=["pi05_backbones", "pi05_vlm_backbones", "pi05_llm_backbone", "pi05_action_expert", "all_linear_conv"],
     )
     parser.add_argument("--max-samples", type=int, default=32)
     parser.add_argument("--fake-calib-samples", type=int, default=0, help="Use random LIBERO examples for smoke tests.")

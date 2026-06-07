@@ -150,6 +150,18 @@ uv run scripts/qvla_assign_gates.py \
   --out-json out/baselines/qvla/pi05_libero/gates_w4_vlm.json
 ```
 
+For the diagnostic W4A8 LLM-only ablation, keep the vision tower and action
+expert in full precision:
+
+```bash
+uv run scripts/qvla_assign_gates.py \
+  --proxy-pt out/baselines/qvla/pi05_libero/proxy.pt \
+  --bits 0,2,4,8,16 \
+  --target-filter pi05_llm_backbone \
+  --target-avg-bits 4.0 \
+  --out-json out/baselines/qvla/pi05_libero/gates_w4_llm.json
+```
+
 ## 3. Calibrate Static Activation Scales
 
 The formal W8A8/W4A8 path uses static calibrated activation scales. The
@@ -261,3 +273,9 @@ The broader `pi05_backbones` target also includes:
 It excludes `multi_modal_projector`, `lm_head`, pi05 AdaRMS condition dense
 layers, and the small top-level action projection/time MLP layers. Treat this
 broader target as an ablation, not the official QVLA-equivalent baseline.
+
+The `pi05_llm_backbone` target applies fake quantization only to:
+
+- `paligemma_with_expert.paligemma.model.language_model.*`
+
+Use it to diagnose whether W4 failures come from over-pruning the vision tower.

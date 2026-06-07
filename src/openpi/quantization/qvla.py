@@ -24,7 +24,13 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
-TargetPreset = Literal["pi05_backbones", "pi05_vlm_backbones", "pi05_action_expert", "all_linear_conv"]
+TargetPreset = Literal[
+    "pi05_backbones",
+    "pi05_vlm_backbones",
+    "pi05_llm_backbone",
+    "pi05_action_expert",
+    "all_linear_conv",
+]
 MismatchPolicy = Literal["median", "skip", "error"]
 ActivationGranularity = Literal["dynamic-token", "dynamic-tensor", "calibrated-tensor"]
 
@@ -32,6 +38,10 @@ ActivationGranularity = Literal["dynamic-token", "dynamic-tensor", "calibrated-t
 _PI05_VLM_TARGET_PREFIXES = (
     "paligemma_with_expert.paligemma.model.language_model.",
     "paligemma_with_expert.paligemma.model.vision_tower.",
+)
+
+_PI05_LLM_TARGET_PREFIXES = (
+    "paligemma_with_expert.paligemma.model.language_model.",
 )
 
 _PI05_ACTION_EXPERT_TARGET_PREFIXES = (
@@ -114,6 +124,10 @@ def is_target_module(name: str, module: nn.Module, target: TargetPreset = "pi05_
         if any(part in name for part in _PI05_EXCLUDE_NAME_PARTS):
             return False
         return any(name.startswith(prefix) for prefix in _PI05_VLM_TARGET_PREFIXES)
+    if target == "pi05_llm_backbone":
+        if any(part in name for part in _PI05_EXCLUDE_NAME_PARTS):
+            return False
+        return any(name.startswith(prefix) for prefix in _PI05_LLM_TARGET_PREFIXES)
     if target == "pi05_action_expert":
         if any(part in name for part in _PI05_EXCLUDE_NAME_PARTS):
             return False
@@ -735,6 +749,10 @@ def proxy_layer_matches_target(layer_name: str, target: TargetPreset) -> bool:
         if any(part in layer_name for part in _PI05_EXCLUDE_NAME_PARTS):
             return False
         return any(layer_name.startswith(prefix) for prefix in _PI05_VLM_TARGET_PREFIXES)
+    if target == "pi05_llm_backbone":
+        if any(part in layer_name for part in _PI05_EXCLUDE_NAME_PARTS):
+            return False
+        return any(layer_name.startswith(prefix) for prefix in _PI05_LLM_TARGET_PREFIXES)
     if target == "pi05_action_expert":
         if any(part in layer_name for part in _PI05_EXCLUDE_NAME_PARTS):
             return False

@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument(
         "--target-filter",
         default="pi05_vlm_backbones",
-        choices=["all_linear_conv", "pi05_backbones", "pi05_vlm_backbones", "pi05_action_expert"],
+        choices=["all_linear_conv", "pi05_backbones", "pi05_vlm_backbones", "pi05_llm_backbone", "pi05_action_expert"],
         help="Filter proxy layers before assigning gates. pi05_vlm_backbones matches the official QVLA target pattern.",
     )
     parser.add_argument("--target-avg-bits", type=float, default=8.0, help="Target global average bit width.")
