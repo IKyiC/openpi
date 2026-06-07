@@ -74,6 +74,9 @@ Accepted aliases:
 ## 1. Build Hessian Proxy
 
 Run this on the Linux server with the converted PyTorch checkpoint available.
+This command is the fast input-covariance proxy path. It is useful for smoke
+tests and ablations, but the stricter QVLA action-space proxy is described in
+the next section.
 
 ```bash
 JAX_PLATFORMS=cpu uv run scripts/qvla_pi05_hessian_proxy.py \
@@ -118,6 +121,71 @@ uv run scripts/qvla_merge_proxy_shards.py \
   out/baselines/qvla/pi05_libero/proxy_shard_*.pt
 ```
 
+## 1b. Build Action-Space Proxy
+
+The paper-faithful QVLA path estimates sensitivity in action space. For each
+target layer, this script measures how quantizing each output channel changes
+the final sampled action, using a first-order Taylor/Jacobian proxy with random
+action projections. This is much slower than the Hessian/input-covariance proxy,
+so use layer sharding across GPUs.
+
+Single-GPU smoke test:
+
+```bash
+JAX_PLATFORMS=cpu uv run python scripts/qvla_pi05_action_proxy.py \
+  --config-name pi05_libero \
+  --checkpoint-dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch \
+  --calib-jsonl out/baselines/libero_fixed_calib/calib.jsonl \
+  --out-path out/baselines/qvla/pi05_libero/action_proxy_smoke.pt \
+  --bits 0,2,4,8,16 \
+  --target pi05_vlm_backbones \
+  --device cuda:0 \
+  --max-samples 2 \
+  --max-layers 1 \
+  --num-probes 1
+```
+
+Multi-GPU run:
+
+```bash
+export CKPT=~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
+export CALIB=out/baselines/libero_fixed_calib/calib.jsonl
+export OUT=out/baselines/qvla/pi05_libero/action_proxy_vlm
+mkdir -p $OUT
+
+GPU_IDS=(1 3 4 5)
+NGPUS=${#GPU_IDS[@]}
+for idx in "${!GPU_IDS[@]}"; do
+  gpu=${GPU_IDS[$idx]}
+  CUDA_VISIBLE_DEVICES=$gpu JAX_PLATFORMS=cpu PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false \
+  uv run python scripts/qvla_pi05_action_proxy.py \
+    --config-name pi05_libero \
+    --checkpoint-dir $CKPT \
+    --calib-jsonl $CALIB \
+    --out-path $OUT/action_proxy_shard_${idx}.pt \
+    --bits 0,2,4,8,16 \
+    --target pi05_vlm_backbones \
+    --device cuda:0 \
+    --max-samples 128 \
+    --num-probes 1 \
+    --save-every 1 \
+    --num-layer-shards $NGPUS \
+    --layer-shard-index $idx \
+    > $OUT/action_proxy_shard_${idx}.log 2>&1 &
+  sleep 20
+done
+wait
+
+uv run python scripts/qvla_merge_proxy_shards.py \
+  --out-path out/baselines/qvla/pi05_libero/action_proxy_vlm.pt \
+  $OUT/action_proxy_shard_*.pt
+```
+
+After the 128-sample run is validated, increase `--max-samples` to 800 for the
+full paper-faithful proxy. The action-space proxy is substantially slower than
+the Hessian/input-covariance proxy because it runs differentiable action
+sampling and backward passes.
+
 ## 2. Assign Weight Gates
 
 ```bash
@@ -130,6 +198,17 @@ uv run scripts/qvla_assign_gates.py \
 
 The output JSON stores channel-wise gates under `assign` and can be passed
 directly to policy loading.
+
+For the action-space proxy, use `action_proxy_vlm.pt` instead of `proxy.pt`:
+
+```bash
+uv run python scripts/qvla_assign_gates.py \
+  --proxy-pt out/baselines/qvla/pi05_libero/action_proxy_vlm.pt \
+  --bits 0,2,4,8,16 \
+  --target-filter pi05_vlm_backbones \
+  --target-avg-bits 8.0 \
+  --out-json out/baselines/qvla/pi05_libero/gates_w8_vlm_action.json
+```
 
 For a W4A4 run, reuse the same proxy and assign a second gate file:
 

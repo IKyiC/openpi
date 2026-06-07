@@ -110,6 +110,10 @@ For multi-GPU proxy generation, shard target layers across jobs with
 `--num-layer-shards` and `--layer-shard-index`, then merge with
 `scripts/qvla_merge_proxy_shards.py`.
 
+The strict QVLA pi05 path should use the action-space proxy script:
+`scripts/qvla_pi05_action_proxy.py`. The older
+`scripts/qvla_pi05_hessian_proxy.py` is a faster input-covariance ablation.
+
 OMEGAQVLA + pi05 should get its own branch and scripts/module names, for
 example:
 

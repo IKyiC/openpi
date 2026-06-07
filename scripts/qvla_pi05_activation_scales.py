@@ -48,7 +48,11 @@ def main() -> None:
     parser.add_argument("--calib-jsonl", help="LIBERO calibration JSONL.")
     parser.add_argument("--image-root", help="Base directory for relative image paths in calibration JSONL.")
     parser.add_argument("--out-path", required=True, help="Output activation scale JSON path.")
-    parser.add_argument("--target", default="pi05_backbones", choices=["pi05_backbones", "all_linear_conv"])
+    parser.add_argument(
+        "--target",
+        default="pi05_backbones",
+        choices=["pi05_backbones", "pi05_vlm_backbones", "pi05_action_expert", "all_linear_conv"],
+    )
     parser.add_argument("--max-samples", type=int, default=800)
     parser.add_argument("--fake-calib-samples", type=int, default=0, help="Use random LIBERO examples for smoke tests.")
     parser.add_argument("--max-layers", type=int, default=None)
