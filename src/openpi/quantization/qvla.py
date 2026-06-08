@@ -347,6 +347,25 @@ def estimate_activation_amax_from_histogram(
 
 
 @torch.no_grad()
+def _fake_quantize_weight_rows_sym(flat_weight: torch.Tensor, bit_width: int) -> torch.Tensor:
+    """Symmetric fake quantization for flattened per-output-channel weights."""
+
+    if bit_width >= 16:
+        return flat_weight
+    if bit_width <= 0:
+        return torch.zeros_like(flat_weight)
+
+    qmax = (1 << (bit_width - 1)) - 1
+    if qmax <= 0:
+        raise ValueError(f"bit_width must be 0 or at least 2, got {bit_width}")
+
+    work = flat_weight.float()
+    scales = work.abs().amax(dim=1, keepdim=True).clamp_min(1e-8) / float(qmax)
+    quantized = torch.round(work / scales).clamp_(min=-(qmax + 1), max=qmax)
+    return (quantized * scales).to(dtype=flat_weight.dtype)
+
+
+@torch.no_grad()
 def apply_weight_only_fake_quant(
     module: nn.Module,
     gates: torch.Tensor,
@@ -372,14 +391,15 @@ def apply_weight_only_fake_quant(
         median_bit = int(gate_tensor.float().median().round().item())
         gate_tensor = torch.full((out_channels,), median_bit, device=weight.device, dtype=torch.int64)
 
-    for channel_idx in range(out_channels):
-        bit_width = int(gate_tensor[channel_idx].item())
+    flat_weight = weight.reshape(out_channels, -1)
+    for bit_width in sorted(int(bit.item()) for bit in torch.unique(gate_tensor)):
         if bit_width >= 16:
             continue
+        mask = gate_tensor == bit_width
         if bit_width <= 0:
-            weight[channel_idx].zero_()
+            flat_weight[mask] = 0
             continue
-        weight[channel_idx].copy_(fake_quantize_tensor_sym(weight[channel_idx], bit_width))
+        flat_weight[mask] = _fake_quantize_weight_rows_sym(flat_weight[mask], bit_width)
 
     return True
 
