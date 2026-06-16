@@ -16,6 +16,7 @@ import logging
 import math
 import pathlib
 import sys
+from typing import Literal
 from typing import Optional
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -72,14 +73,30 @@ class Args:
     num_trials_per_task: int = BASELINE_NUM_TRIALS_PER_TASK
     max_examples: int = 800
     max_examples_per_episode: Optional[int] = None
+    sampling_strategy: Literal["episode-first", "reservoir", "first"] = "episode-first"
 
     out_jsonl: str = "out/baselines/libero_rollout_calib/calib.jsonl"
     image_dir: str = "out/baselines/libero_rollout_calib/images"
     video_out_path: Optional[str] = None
 
 
+@dataclasses.dataclass
+class _Record:
+    example: dict
+    task_suite_name: str
+    task_id: int
+    episode_idx: int
+    timestep: int
+    candidate_idx: int
+    base_img: np.ndarray
+    wrist_img: np.ndarray
+
+
 def generate_rollout_calib_jsonl(args: Args) -> None:
     np.random.seed(args.seed)
+    rng = np.random.default_rng(args.seed)
+    if args.max_examples <= 0:
+        raise ValueError("--max-examples must be positive")
 
     out_jsonl = pathlib.Path(args.out_jsonl)
     image_dir = pathlib.Path(args.image_dir)
@@ -95,13 +112,16 @@ def generate_rollout_calib_jsonl(args: Args) -> None:
     client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
     benchmark_dict = benchmark.get_benchmark_dict()
     examples_written = 0
+    candidates_seen = 0
+    reservoir: list[_Record] = []
 
     logging.info(
-        "Generating rollout calibration: suites=%s num_tasks=%s trials=%s max_examples=%s server=%s:%s",
+        "Generating rollout calibration: suites=%s num_tasks=%s trials=%s max_examples=%s sampling=%s server=%s:%s",
         ",".join(task_suite_names),
         args.num_tasks,
         args.num_trials_per_task,
         args.max_examples,
+        args.sampling_strategy,
         args.host,
         args.port,
     )
@@ -129,6 +149,7 @@ def generate_rollout_calib_jsonl(args: Args) -> None:
                         action_plan = collections.deque()
                         replay_images = []
                         episode_examples = 0
+                        episode_recorded = False
                         done = False
                         t = 0
 
@@ -144,22 +165,38 @@ def generate_rollout_calib_jsonl(args: Args) -> None:
                                     task_description,
                                     args.resize_size,
                                 )
-                                replay_images.append(base_img)
+                                if args.video_out_path is not None:
+                                    replay_images.append(base_img)
 
-                                _write_example(
-                                    jsonl=jsonl,
-                                    image_dir=image_dir,
+                                record = _Record(
                                     example=element,
                                     task_suite_name=task_suite_name,
                                     task_id=task_id,
                                     episode_idx=episode_idx,
                                     timestep=t,
-                                    example_idx=examples_written,
-                                    base_img=base_img,
-                                    wrist_img=wrist_img,
+                                    candidate_idx=candidates_seen,
+                                    base_img=base_img.copy(),
+                                    wrist_img=wrist_img.copy(),
                                 )
-                                examples_written += 1
-                                episode_examples += 1
+                                candidates_seen += 1
+                                should_record_episode_first = (
+                                    args.sampling_strategy == "episode-first" and not episode_recorded
+                                )
+                                if should_record_episode_first or args.sampling_strategy == "first":
+                                    _write_record(
+                                        jsonl=jsonl,
+                                        image_dir=image_dir,
+                                        record=record,
+                                        example_idx=examples_written,
+                                    )
+                                    examples_written += 1
+                                    episode_recorded = True
+                                elif args.sampling_strategy == "reservoir":
+                                    _reservoir_update(reservoir, record, args.max_examples, candidates_seen, rng)
+                                elif args.sampling_strategy != "episode-first":
+                                    raise ValueError(f"Unknown sampling strategy: {args.sampling_strategy}")
+                                if should_record_episode_first or args.sampling_strategy != "episode-first":
+                                    episode_examples += 1
 
                                 action_chunk = client.infer(element)["actions"]
                                 if len(action_chunk) < args.replan_steps:
@@ -169,7 +206,7 @@ def generate_rollout_calib_jsonl(args: Args) -> None:
                                     )
                                 action_plan.extend(action_chunk[: args.replan_steps])
 
-                                if examples_written >= args.max_examples:
+                                if args.sampling_strategy in ("episode-first", "first") and examples_written >= args.max_examples:
                                     _write_video_if_requested(
                                         args.video_out_path,
                                         task_suite_name,
@@ -203,7 +240,29 @@ def generate_rollout_calib_jsonl(args: Args) -> None:
                 finally:
                     env.close()
 
+        if args.sampling_strategy == "reservoir":
+            reservoir.sort(key=lambda record: record.candidate_idx)
+            for example_idx, record in enumerate(reservoir):
+                _write_record(jsonl=jsonl, image_dir=image_dir, record=record, example_idx=example_idx)
+            examples_written = len(reservoir)
+
+    logging.info("Saw %s rollout candidate observations", candidates_seen)
     logging.info("Wrote %s rollout calibration examples to %s", examples_written, out_jsonl)
+
+
+def _reservoir_update(
+    reservoir: list[_Record],
+    record: _Record,
+    max_examples: int,
+    candidates_seen: int,
+    rng: np.random.Generator,
+) -> None:
+    if len(reservoir) < max_examples:
+        reservoir.append(record)
+        return
+    replace_idx = int(rng.integers(0, candidates_seen))
+    if replace_idx < max_examples:
+        reservoir[replace_idx] = record
 
 
 def _policy_input_from_obs(obs, task_description: str, resize_size: int):
@@ -230,34 +289,32 @@ def _policy_input_from_obs(obs, task_description: str, resize_size: int):
     )
 
 
-def _write_example(
+def _write_record(
     *,
     jsonl,
     image_dir: pathlib.Path,
-    example: dict,
-    task_suite_name: str,
-    task_id: int,
-    episode_idx: int,
-    timestep: int,
+    record: _Record,
     example_idx: int,
-    base_img: np.ndarray,
-    wrist_img: np.ndarray,
 ) -> None:
-    stem = f"{example_idx:06d}_{task_suite_name}_task_{task_id:02d}_episode_{episode_idx:02d}_t_{timestep:04d}"
+    stem = (
+        f"{example_idx:06d}_{record.task_suite_name}_task_{record.task_id:02d}_"
+        f"episode_{record.episode_idx:02d}_t_{record.timestep:04d}"
+    )
     base_path = image_dir / f"{stem}_base.png"
     wrist_path = image_dir / f"{stem}_wrist.png"
-    Image.fromarray(base_img).save(base_path)
-    Image.fromarray(wrist_img).save(wrist_path)
+    Image.fromarray(record.base_img).save(base_path)
+    Image.fromarray(record.wrist_img).save(wrist_path)
 
     row = {
         "observation/image": str(base_path.resolve()),
         "observation/wrist_image": str(wrist_path.resolve()),
-        "observation/state": np.asarray(example["observation/state"], dtype=np.float32).tolist(),
-        "prompt": str(example["prompt"]),
-        "task_suite_name": task_suite_name,
-        "task_id": int(task_id),
-        "episode_idx": int(episode_idx),
-        "timestep": int(timestep),
+        "observation/state": np.asarray(record.example["observation/state"], dtype=np.float32).tolist(),
+        "prompt": str(record.example["prompt"]),
+        "task_suite_name": record.task_suite_name,
+        "task_id": int(record.task_id),
+        "episode_idx": int(record.episode_idx),
+        "timestep": int(record.timestep),
+        "candidate_idx": int(record.candidate_idx),
     }
     jsonl.write(json.dumps(row) + "\n")
 

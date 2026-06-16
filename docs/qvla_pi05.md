@@ -82,7 +82,12 @@ MUJOCO_GL=egl python examples/libero/generate_rollout_calib_jsonl.py \
 
 This does not change the QVLA sensitivity formula. It only replaces the static
 initial-frame calibration distribution with rollout observations from the same
-fixed LIBERO task and initial-state split.
+fixed LIBERO task and initial-state split. By default the script uses
+`--sampling-strategy episode-first`, so formal calibration writes exactly one
+entry for each fixed episode: four suites, first 10 tasks per suite, first 20
+initial states per task, 800 entries total. The `reservoir` and `first`
+sampling strategies are diagnostic ablations only and should not be used for
+the formal baseline.
 
 Each JSONL line describes one LIBERO-style policy input. Image paths may be
 absolute or relative to the JSONL file directory, or to `--image-root`.
