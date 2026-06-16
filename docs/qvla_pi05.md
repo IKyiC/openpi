@@ -52,6 +52,38 @@ QVLA proxy command:
 export CALIB=out/baselines/libero_fixed_calib/calib.jsonl
 ```
 
+The fixed calibration file records one post-wait observation per fixed episode.
+For strict W4 experiments, prefer policy-driven rollout calibration: start a
+full-precision pi05 LIBERO policy server in one terminal, then record the
+observations that are actually sent back to the policy at replan time from a
+second terminal.
+
+```bash
+# Terminal 1: full-precision policy server.
+JAX_PLATFORMS=cpu uv run scripts/serve_policy.py \
+  --port 8700 \
+  --pytorch-compile-mode none \
+  policy:checkpoint \
+  --policy.config pi05_libero \
+  --policy.dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
+```
+
+```bash
+# Terminal 2: rollout calibration recorder.
+source examples/libero/.venv/bin/activate
+export PYTHONPATH=$PWD/third_party/libero:$PYTHONPATH
+MUJOCO_GL=egl python examples/libero/generate_rollout_calib_jsonl.py \
+  --host 127.0.0.1 \
+  --port 8700 \
+  --max-examples 800 \
+  --out-jsonl out/baselines/libero_rollout_calib/calib.jsonl \
+  --image-dir out/baselines/libero_rollout_calib/images
+```
+
+This does not change the QVLA sensitivity formula. It only replaces the static
+initial-frame calibration distribution with rollout observations from the same
+fixed LIBERO task and initial-state split.
+
 Each JSONL line describes one LIBERO-style policy input. Image paths may be
 absolute or relative to the JSONL file directory, or to `--image-root`.
 
